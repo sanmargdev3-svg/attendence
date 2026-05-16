@@ -1,0 +1,399 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Bulk Face Descriptor Extraction</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <script async src="https://cdn.jsdelivr.net/npm/@vladmandic/face-api/dist/face-api.js"></script>
+    <style>
+        body {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+        .container {
+            max-width: 900px;
+        }
+        .card {
+            border-radius: 15px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.2);
+        }
+        .header {
+            border-radius: 15px 15px 0 0;
+            padding: 20px;
+            color: white;
+        }
+        .progress-section {
+            margin: 30px 0;
+        }
+        .employee-log {
+            max-height: 400px;
+            overflow-y: auto;
+            background: #f8f9fa;
+            border-radius: 10px;
+            padding: 15px;
+            font-family: monospace;
+            font-size: 12px;
+        }
+        .success {
+            color: #28a745;
+        }
+        .error {
+            color: #dc3545;
+        }
+        .warning {
+            color: #ffc107;
+        }
+        .info {
+            color: #17a2b8;
+        }
+        .stats {
+            display: grid;
+            grid-template-columns: 1fr 1fr 1fr 1fr;
+            gap: 10px;
+            margin: 20px 0;
+        }
+        .stat-box {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 15px;
+            border-radius: 10px;
+            text-align: center;
+        }
+        .stat-box .number {
+            font-size: 28px;
+            font-weight: bold;
+        }
+        .stat-box .label {
+            font-size: 12px;
+            opacity: 0.9;
+        }
+        button:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <!-- Header -->
+        <div class="card">
+            <div class="header bg-primary">
+                <h2><i class="fas fa-face-smile"></i> Bulk Face Descriptor Extraction</h2>
+                <p class="mb-0">Extract face descriptors for all 200+ employees at once</p>
+            </div>
+
+            <!-- Stats -->
+            <div class="card-body">
+                <div class="stats">
+                    <div class="stat-box">
+                        <div class="number" id="statTotal">0</div>
+                        <div class="label">Total Employees</div>
+                    </div>
+                    <div class="stat-box">
+                        <div class="number" id="statProcessed">0</div>
+                        <div class="label">Processed</div>
+                    </div>
+                    <div class="stat-box">
+                        <div class="number" id="statSuccess">0</div>
+                        <div class="label">Success</div>
+                    </div>
+                    <div class="stat-box">
+                        <div class="number" id="statFailed">0</div>
+                        <div class="label">Failed</div>
+                    </div>
+                </div>
+
+                <!-- Progress Bar -->
+                <div class="progress-section">
+                    <label>Overall Progress:</label>
+                    <div class="progress" style="height: 30px;">
+                        <div class="progress-bar progress-bar-striped progress-bar-animated" id="progressBar" 
+                             role="progressbar" style="width: 0%;" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100">
+                            <span id="progressText">0%</span>
+                        </div>
+                    </div>
+                    <small class="text-muted">Estimated time: <span id="estimatedTime">--</span></small>
+                </div>
+
+                <!-- Controls -->
+                <div class="mb-3">
+                    <button class="btn btn-success btn-lg" id="startBtn" onclick="startExtraction()">
+                        <i class="fas fa-play"></i> Start Extraction
+                    </button>
+                    <button class="btn btn-warning btn-lg" id="pauseBtn" onclick="pauseExtraction()" disabled>
+                        <i class="fas fa-pause"></i> Pause
+                    </button>
+                    <button class="btn btn-danger btn-lg" id="stopBtn" onclick="stopExtraction()" disabled>
+                        <i class="fas fa-stop"></i> Stop
+                    </button>
+                </div>
+
+                <!-- Status Message -->
+                <div class="alert alert-info" id="statusAlert" style="display:none;"></div>
+
+                <!-- Employee Log -->
+                <h5>Processing Log:</h5>
+                <div class="employee-log" id="employeeLog">
+                    <div class="info">Waiting to start...</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let modelsLoaded = false;
+        let isExtracting = false;
+        let isPaused = false;
+        let employees = [];
+        let stats = { total: 0, processed: 0, success: 0, failed: 0 };
+        let startTime = null;
+
+        // Load employee data
+        async function loadEmployeeData() {
+            try {
+                console.log('Loading employee data...');
+                const response = await fetch('bulk_extraction_data.json');
+                const data = await response.json();
+                employees = data.employees;
+                stats.total = employees.length;
+                document.getElementById('statTotal').textContent = stats.total;
+                console.log('Loaded ' + employees.length + ' employees');
+                return true;
+            } catch(err) {
+                log('❌ Error loading employee data: ' + err.message, 'error');
+                return false;
+            }
+        }
+
+        // Load face-api models
+        async function loadModels() {
+            if (modelsLoaded) return true;
+            
+            try {
+                log('⏳ Loading face recognition models (10-15 seconds)...', 'warning');
+                const MODEL_URL = 'https://cdn.jsdelivr.net/npm/@vladmandic/face-api/model/';
+                
+                log('  Loading tinyFaceDetector...', 'info');
+                await faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL);
+                await new Promise(resolve => setTimeout(resolve, 500));
+                
+                log('  Loading faceLandmark68Net...', 'info');
+                await faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL);
+                await new Promise(resolve => setTimeout(resolve, 500));
+                
+                log('  Loading faceRecognitionNet...', 'info');
+                await faceapi.nets.faceRecognitionNet.loadFromUri(MODEL_URL);
+                await new Promise(resolve => setTimeout(resolve, 500));
+                
+                log('  Loading faceExpressionNet...', 'info');
+                await faceapi.nets.faceExpressionNet.loadFromUri(MODEL_URL);
+                await new Promise(resolve => setTimeout(resolve, 1000));
+                
+                log('✅ All models loaded', 'success');
+                log('⏳ Initializing neural networks (3 seconds)...', 'warning');
+                await new Promise(resolve => setTimeout(resolve, 3000));
+                
+                log('✅ Neural networks initialized', 'success');
+                modelsLoaded = true;
+                return true;
+            } catch(err) {
+                log('❌ Error loading models: ' + err.message, 'error');
+                log('Stack: ' + err.stack, 'error');
+                return false;
+            }
+        }
+
+        // Log message
+        function log(message, type = 'info') {
+            const logDiv = document.getElementById('employeeLog');
+            const entry = document.createElement('div');
+            entry.className = type;
+            entry.textContent = new Date().toLocaleTimeString() + ' | ' + message;
+            logDiv.appendChild(entry);
+            logDiv.scrollTop = logDiv.scrollHeight;
+            console.log('LOG: ' + message);
+        }
+
+        // Extract descriptor for one employee
+        async function extractEmployeeDescriptor(employee) {
+            try {
+                if (!employee.photo_base64) {
+                    log(`⚠️ SKIP ${employee.name} - No photo`, 'warning');
+                    return false;
+                }
+
+                // Load image to canvas
+                const canvas = document.createElement('canvas');
+                const ctx = canvas.getContext('2d');
+                const img = new Image();
+                
+                await new Promise((resolve, reject) => {
+                    img.onload = () => {
+                        canvas.width = img.width;
+                        canvas.height = img.height;
+                        ctx.drawImage(img, 0, 0);
+                        resolve();
+                    };
+                    img.onerror = reject;
+                    img.src = employee.photo_base64;
+                });
+
+                // Extract descriptor - MUST use TinyFaceDetectorOptions
+                let detection = null;
+                try {
+                    detection = await faceapi
+                        .detectSingleFace(canvas, new faceapi.TinyFaceDetectorOptions())
+                        .withFaceLandmarks()
+                        .withFaceDescriptor();
+                } catch(detectionErr) {
+                    log(`⚠️ First detection failed for ${employee.name}, retrying...`, 'warning');
+                    await new Promise(resolve => setTimeout(resolve, 1000));
+                    
+                    detection = await faceapi
+                        .detectSingleFace(canvas, new faceapi.TinyFaceDetectorOptions())
+                        .withFaceLandmarks()
+                        .withFaceDescriptor();
+                }
+
+                if (!detection) {
+                    log(`⚠️ FAIL ${employee.name} - No face detected`, 'warning');
+                    return false;
+                }
+
+                const descriptor = Array.from(detection.descriptor);
+
+                // Save to database
+                const response = await fetch('api/save_face_descriptor.php', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                        employee_id: employee.id,
+                        descriptor: descriptor
+                    })
+                });
+
+                const result = await response.json();
+
+                if (result.success) {
+                    log(`✅ OK ${employee.name} (${employee.employee_id})`, 'success');
+                    return true;
+                } else {
+                    log(`⚠️ FAIL ${employee.name} - Save error: ${result.error}`, 'warning');
+                    return false;
+                }
+
+            } catch(err) {
+                log(`❌ ERROR ${employee.name} - ${err.message}`, 'error');
+                return false;
+            }
+        }
+
+        // Start extraction
+        async function startExtraction() {
+            if (isExtracting) return;
+
+            // Load data and models
+            const dataOk = await loadEmployeeData();
+            if (!dataOk) return;
+
+            const modelsOk = await loadModels();
+            if (!modelsOk) return;
+
+            // Disable start button, enable pause/stop
+            document.getElementById('startBtn').disabled = true;
+            document.getElementById('pauseBtn').disabled = false;
+            document.getElementById('stopBtn').disabled = false;
+
+            log('🚀 Starting extraction for ' + employees.length + ' employees...', 'info');
+            isExtracting = true;
+            isPaused = false;
+            startTime = Date.now();
+            stats.processed = 0;
+            stats.success = 0;
+            stats.failed = 0;
+
+            // Process each employee
+            for (let i = 0; i < employees.length; i++) {
+                // Check pause
+                while (isPaused && isExtracting) {
+                    await new Promise(resolve => setTimeout(resolve, 100));
+                }
+
+                if (!isExtracting) {
+                    log('🛑 Extraction stopped', 'warning');
+                    break;
+                }
+
+                const employee = employees[i];
+                const success = await extractEmployeeDescriptor(employee);
+
+                if (success) {
+                    stats.success++;
+                } else {
+                    stats.failed++;
+                }
+
+                stats.processed++;
+
+                // Update progress
+                const percent = Math.round((stats.processed / stats.total) * 100);
+                document.getElementById('progressBar').style.width = percent + '%';
+                document.getElementById('progressText').textContent = percent + '%';
+                document.getElementById('statProcessed').textContent = stats.processed;
+                document.getElementById('statSuccess').textContent = stats.success;
+                document.getElementById('statFailed').textContent = stats.failed;
+
+                // Estimate time
+                const elapsed = (Date.now() - startTime) / 1000;
+                const rate = stats.processed / elapsed;
+                const remaining = (stats.total - stats.processed) / rate;
+                document.getElementById('estimatedTime').textContent = 
+                    Math.round(remaining) + ' seconds';
+
+                // Small delay between extractions
+                await new Promise(resolve => setTimeout(resolve, 200));
+            }
+
+            // Done
+            isExtracting = false;
+            document.getElementById('startBtn').disabled = false;
+            document.getElementById('pauseBtn').disabled = true;
+            document.getElementById('stopBtn').disabled = true;
+
+            log('✅ Extraction complete!', 'success');
+            log(`📊 Results: ${stats.success}/${stats.total} successful, ${stats.failed} failed`, 'info');
+        }
+
+        // Pause extraction
+        function pauseExtraction() {
+            isPaused = !isPaused;
+            const btn = document.getElementById('pauseBtn');
+            if (isPaused) {
+                btn.textContent = ' Resume';
+                log('⏸️ Extraction paused', 'warning');
+            } else {
+                btn.textContent = ' Pause';
+                log('▶️ Extraction resumed', 'info');
+            }
+        }
+
+        // Stop extraction
+        function stopExtraction() {
+            isExtracting = false;
+            document.getElementById('startBtn').disabled = false;
+            document.getElementById('pauseBtn').disabled = true;
+            document.getElementById('stopBtn').disabled = true;
+            log('🛑 Extraction stopped', 'error');
+        }
+
+        // Initialize on page load
+        window.addEventListener('load', () => {
+            log('📂 Bulk extraction tool ready', 'success');
+            log('Click "Start Extraction" to begin', 'info');
+        });
+    </script>
+</body>
+</html>
