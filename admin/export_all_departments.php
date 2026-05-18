@@ -1,5 +1,10 @@
 <?php
 session_start();
+
+// Increase timeout and memory for large exports (400+ employees)
+set_time_limit(600); // 10 minutes
+ini_set('memory_limit', '512M');
+
 include('../config/db.php');
 
 require '../vendor/autoload.php';
@@ -105,41 +110,114 @@ while ($row = $result->fetch_assoc()) {
 }
 $stmt->close();
 
-// Helper function to check status for a date
-function getStatusForDate($conn, $user_id, $date_str, $week_off) {
+// Batch load all data ONCE before processing any sheets
+$all_employee_ids = [];
+foreach ($employees_by_location as $location_employees) {
+    foreach ($location_employees as $dept_employees) {
+        foreach ($dept_employees as $emp) {
+            $all_employee_ids[] = $emp['id'];
+        }
+    }
+}
+
+// Remove duplicates
+$all_employee_ids = array_unique($all_employee_ids);
+
+// Batch load attendance data
+$attendance_cache = [];
+if (!empty($all_employee_ids)) {
+    $placeholders = implode(',', array_fill(0, count($all_employee_ids), '?'));
+    $date_start = $date_range[0];
+    $date_end = $date_range[count($date_range) - 1];
+    
+    $query = "SELECT user_id, DATE(date) as att_date, status, punch_in, punch_out 
+              FROM attendance 
+              WHERE user_id IN ($placeholders) AND DATE(date) BETWEEN ? AND ?";
+    $stmt = $conn->prepare($query);
+    
+    $types = str_repeat('i', count($all_employee_ids)) . 'ss';
+    $params = array_merge($all_employee_ids, [$date_start, $date_end]);
+    $stmt->bind_param($types, ...$params);
+    $stmt->execute();
+    $result = $stmt->get_result();
+    while ($row_att = $result->fetch_assoc()) {
+        $key = $row_att['user_id'] . '_' . $row_att['att_date'];
+        if (!isset($attendance_cache[$key])) {
+            $attendance_cache[$key] = ['status' => $row_att['status'], 'punch_in' => $row_att['punch_in'], 'punch_out' => $row_att['punch_out'], 'times' => []];
+        }
+        $attendance_cache[$key]['times'][] = ['punch_in' => $row_att['punch_in'], 'punch_out' => $row_att['punch_out']];
+    }
+    $stmt->close();
+}
+
+// Batch load OD records
+$od_cache = [];
+if (!empty($all_employee_ids)) {
+    $placeholders = implode(',', array_fill(0, count($all_employee_ids), '?'));
+    $date_start = $date_range[0];
+    $date_end = $date_range[count($date_range) - 1];
+    
+    $query = "SELECT user_id, od_date FROM od_records 
+              WHERE user_id IN ($placeholders) AND od_date BETWEEN ? AND ?";
+    $stmt = $conn->prepare($query);
+    
+    $types = str_repeat('i', count($all_employee_ids)) . 'ss';
+    $params = array_merge($all_employee_ids, [$date_start, $date_end]);
+    $stmt->bind_param($types, ...$params);
+    $stmt->execute();
+    $result = $stmt->get_result();
+    while ($row_od = $result->fetch_assoc()) {
+        $key = $row_od['user_id'] . '_' . $row_od['od_date'];
+        $od_cache[$key] = true;
+    }
+    $stmt->close();
+}
+
+// Batch load comp off requests
+$comp_off_cache = [];
+if (!empty($all_employee_ids)) {
+    $placeholders = implode(',', array_fill(0, count($all_employee_ids), '?'));
+    $date_start = $date_range[0];
+    $date_end = $date_range[count($date_range) - 1];
+    
+    $query = "SELECT user_id, comp_off_date, earned_date FROM comp_off_requests 
+              WHERE user_id IN ($placeholders) AND comp_off_date BETWEEN ? AND ?";
+    $stmt = $conn->prepare($query);
+    
+    $types = str_repeat('i', count($all_employee_ids)) . 'ss';
+    $params = array_merge($all_employee_ids, [$date_start, $date_end]);
+    $stmt->bind_param($types, ...$params);
+    $stmt->execute();
+    $result = $stmt->get_result();
+    while ($row_co = $result->fetch_assoc()) {
+        $key = $row_co['user_id'] . '_' . $row_co['comp_off_date'];
+        $comp_off_cache[$key] = $row_co['earned_date'];
+    }
+    $stmt->close();
+}
+
+// Helper function to check status for a date (using cached data)
+function getStatusForDate($user_id, $date_str, $week_off, $attendance_cache, $od_cache, $comp_off_cache) {
     $day_name = date('l', strtotime($date_str));
     
     if ($week_off === $day_name) {
         return 'WO';
     }
     
-    $stmt_od = $conn->prepare("SELECT id FROM od_records WHERE user_id = ? AND od_date = ?");
-    $stmt_od->bind_param("is", $user_id, $date_str);
-    $stmt_od->execute();
-    $result_od = $stmt_od->get_result();
-    if ($result_od->num_rows > 0) {
-        $stmt_od->close();
+    // Check OD records from cache
+    $od_key = $user_id . '_' . $date_str;
+    if (isset($od_cache[$od_key])) {
         return 'OD';
     }
-    $stmt_od->close();
     
-    // Check if there's a comp off for this date
-    $stmt_co = $conn->prepare("SELECT id FROM comp_off_requests WHERE user_id = ? AND comp_off_date = ?");
-    $stmt_co->bind_param("is", $user_id, $date_str);
-    $stmt_co->execute();
-    $result_co = $stmt_co->get_result();
-    $has_comp_off = $result_co->num_rows > 0;
-    $stmt_co->close();
+    // Check comp off from cache
+    $comp_off_key = $user_id . '_' . $date_str;
+    $has_comp_off = isset($comp_off_cache[$comp_off_key]);
     
-    $stmt_att = $conn->prepare("SELECT status FROM attendance WHERE user_id = ? AND DATE(date) = ?");
-    $stmt_att->bind_param("is", $user_id, $date_str);
-    $stmt_att->execute();
-    $result_att = $stmt_att->get_result();
-    
-    if ($result_att->num_rows > 0) {
-        $att_row = $result_att->fetch_assoc();
-        $stmt_att->close();
-        $status = ($att_row['status'] === 'Present' || $att_row['status'] === 'Late') ? 'P' : 'A';
+    // Check attendance from cache
+    if (isset($attendance_cache[$od_key])) {
+        $att_status = $attendance_cache[$od_key]['status'];
+        $status = ($att_status === 'Present' || $att_status === 'Late') ? 'P' : 'A';
         // If absent but has comp off, show ADJ (adjusted)
         if ($status === 'A' && $has_comp_off) {
             return 'ADJ';
@@ -147,7 +225,6 @@ function getStatusForDate($conn, $user_id, $date_str, $week_off) {
         return $status;
     }
     
-    $stmt_att->close();
     // If no attendance record but has comp off, show ADJ
     if ($has_comp_off) {
         return 'ADJ';
@@ -176,64 +253,32 @@ function extractTimeFromTimestamp($timestamp) {
     return (strlen($timestamp) >= 5) ? substr($timestamp, 0, 5) : '-';
 }
 
-function getPunchTimes($conn, $user_id, $date_str) {
-    $stmt = $conn->prepare("
-        SELECT 
-            MIN(punch_in) as first_punch_in, 
-            MAX(punch_out) as last_punch_out
-        FROM attendance 
-        WHERE user_id = ? AND DATE(date) = ?
-    ");
-    $stmt->bind_param("is", $user_id, $date_str);
-    $stmt->execute();
-    $result = $stmt->get_result();
-    
-    if ($result->num_rows > 0) {
-        $row = $result->fetch_assoc();
-        $stmt->close();
-        return $row;
-    }
-    $stmt->close();
-    return null;
-}
-
 function calculateHours($punch_in, $punch_out) {
     if (!$punch_in || !$punch_out) {
         return '-';
     }
-    $in = strtotime($punch_in);
-    $out = strtotime($punch_out);
-    $diff = $out - $in;
     
-    // Handle overnight shifts (shift crosses midnight)
-    // If punch_out is earlier than punch_in on the same day, add 24 hours
-    if ($diff < 0) {
-        $diff += 86400; // 24 hours in seconds
+    try {
+        $punch_in_time = DateTime::createFromFormat('Y-m-d H:i:s', $punch_in);
+        if (!$punch_in_time && strpos($punch_in, ':') !== false) {
+            $punch_in_time = DateTime::createFromFormat('H:i:s', $punch_in);
+        }
+        
+        $punch_out_time = DateTime::createFromFormat('Y-m-d H:i:s', $punch_out);
+        if (!$punch_out_time && strpos($punch_out, ':') !== false) {
+            $punch_out_time = DateTime::createFromFormat('H:i:s', $punch_out);
+        }
+        
+        if ($punch_in_time && $punch_out_time) {
+            $interval = $punch_in_time->diff($punch_out_time);
+            $hours = $interval->h + ($interval->i / 60);
+            return number_format($hours, 2);
+        }
+    } catch (Exception $e) {
+        return '-';
     }
     
-    $hours = floor($diff / 3600);
-    $minutes = floor(($diff % 3600) / 60);
-    $seconds = $diff % 60;
-    return sprintf("%02d:%02d", $hours, $minutes);
-}
-
-function getCompOffDate($conn, $employee_id, $date_str) {
-    $stmt = $conn->prepare("SELECT earned_date FROM comp_off_requests WHERE user_id = ? AND comp_off_date = ?");
-    
-    if ($stmt === false) {
-        return false;
-    }
-    
-    $stmt->bind_param("is", $employee_id, $date_str);
-    $stmt->execute();
-    $result = $stmt->get_result();
-    if ($result->num_rows > 0) {
-        $row = $result->fetch_assoc();
-        $stmt->close();
-        return $row['earned_date'];
-    }
-    $stmt->close();
-    return false;
+    return '-';
 }
 
 // Create Spreadsheet
@@ -258,7 +303,7 @@ $labelAlignment = new Alignment(['horizontal' => 'center', 'vertical' => 'center
 $centerAlignment = new Alignment(['horizontal' => 'center', 'vertical' => 'center']);
 
 // Function to create sheet for a location
-function createLocationSheet($spreadsheet, $location, $employees_by_dept, $date_range, $days_in_month, $month_name, $titleFont, $titleAlignment, $centerAlignment, $conn) {
+function createLocationSheet($spreadsheet, $location, $employees_by_dept, $date_range, $days_in_month, $month_name, $titleFont, $titleAlignment, $centerAlignment, $conn, $attendance_cache, $od_cache, $comp_off_cache) {
     $sheet = $spreadsheet->createSheet();
     $sheet->setTitle(substr($location, 0, 31)); // Excel sheet name max 31 chars
     
@@ -334,7 +379,7 @@ function createLocationSheet($spreadsheet, $location, $employees_by_dept, $date_
                 if ($emp_resigned && new DateTime($date_str) > $resign_month_end) {
                     $status = '-';
                 } else {
-                    $status = getStatusForDate($conn, $emp['id'], $date_str, $emp['week_off']);
+                    $status = getStatusForDate($emp['id'], $date_str, $emp['week_off'], $attendance_cache, $od_cache, $comp_off_cache);
                 }
                 $col = Coordinate::stringFromColumnIndex($day_index + 2);
                 $sheet->setCellValue($col . $row, $status);
@@ -352,8 +397,12 @@ function createLocationSheet($spreadsheet, $location, $employees_by_dept, $date_
                 if ($emp_resigned && new DateTime($date_str) > $resign_month_end) {
                     $punch_in = '-';
                 } else {
-                    $times = getPunchTimes($conn, $emp['id'], $date_str);
-                    $punch_in = $times && !empty($times['first_punch_in']) ? extractTimeFromTimestamp($times['first_punch_in']) : '-';
+                    $key = $emp['id'] . '_' . $date_str;
+                    if (isset($attendance_cache[$key]) && !empty($attendance_cache[$key]['times'])) {
+                        $punch_in = extractTimeFromTimestamp($attendance_cache[$key]['times'][0]['punch_in']);
+                    } else {
+                        $punch_in = '-';
+                    }
                 }
                 $col = Coordinate::stringFromColumnIndex($day_index + 2);
                 $sheet->setCellValue($col . $row, $punch_in);
@@ -371,8 +420,13 @@ function createLocationSheet($spreadsheet, $location, $employees_by_dept, $date_
                 if ($emp_resigned && new DateTime($date_str) > $resign_month_end) {
                     $punch_out = '-';
                 } else {
-                    $times = getPunchTimes($conn, $emp['id'], $date_str);
-                    $punch_out = $times && !empty($times['last_punch_out']) ? extractTimeFromTimestamp($times['last_punch_out']) : '-';
+                    $key = $emp['id'] . '_' . $date_str;
+                    if (isset($attendance_cache[$key]) && !empty($attendance_cache[$key]['times'])) {
+                        $num_punches = count($attendance_cache[$key]['times']);
+                        $punch_out = extractTimeFromTimestamp($attendance_cache[$key]['times'][$num_punches - 1]['punch_out']);
+                    } else {
+                        $punch_out = '-';
+                    }
                 }
                 $col = Coordinate::stringFromColumnIndex($day_index + 2);
                 $sheet->setCellValue($col . $row, $punch_out);
@@ -390,13 +444,16 @@ function createLocationSheet($spreadsheet, $location, $employees_by_dept, $date_
                 if ($emp_resigned && new DateTime($date_str) > $resign_month_end) {
                     $display = '-';
                 } else {
-                    $compOffDate = getCompOffDate($conn, $emp['id'], $date_str);
-                    if ($compOffDate) {
-                        $day_taken = date('d', strtotime($compOffDate));
+                    $key = $emp['id'] . '_' . $date_str;
+                    if (isset($comp_off_cache[$key])) {
+                        $day_taken = date('d', strtotime($comp_off_cache[$key]));
                         $display = 'CO-' . $day_taken;
+                    } elseif (isset($attendance_cache[$key]) && !empty($attendance_cache[$key]['times'])) {
+                        $first_punch = $attendance_cache[$key]['times'][0]['punch_in'];
+                        $last_punch = $attendance_cache[$key]['times'][count($attendance_cache[$key]['times']) - 1]['punch_out'];
+                        $display = calculateHours($first_punch, $last_punch);
                     } else {
-                        $times = getPunchTimes($conn, $emp['id'], $date_str);
-                        $display = calculateHours($times['first_punch_in'] ?? null, $times['last_punch_out'] ?? null);
+                        $display = '-';
                     }
                 }
                 $col = Coordinate::stringFromColumnIndex($day_index + 2);
@@ -425,7 +482,7 @@ function createLocationSheet($spreadsheet, $location, $employees_by_dept, $date_
 
 // Create a sheet for each location
 foreach ($employees_by_location as $location => $employees_by_dept) {
-    createLocationSheet($spreadsheet, $location, $employees_by_dept, $date_range, $days_in_month, $month_name, $titleFont, $titleAlignment, $centerAlignment, $conn);
+    createLocationSheet($spreadsheet, $location, $employees_by_dept, $date_range, $days_in_month, $month_name, $titleFont, $titleAlignment, $centerAlignment, $conn, $attendance_cache, $od_cache, $comp_off_cache);
 }
 
 // Set filename with date range
