@@ -17,18 +17,35 @@ if (!isset($_SESSION['user_id']) || ($_SESSION['role'] !== 'admin' && $_SESSION[
     exit();
 }
 
-// Get employee ID and month/year
+// Get employee ID and date range or month/year
 if (!isset($_POST['employee_id'])) {
     header("Location: export_monthly.php");
     exit();
 }
 
 $employee_id = intval($_POST['employee_id']);
-$month = isset($_POST['month']) ? intval($_POST['month']) : date('m');
-$year = isset($_POST['year']) ? intval($_POST['year']) : date('Y');
+$from_date = isset($_POST['from_date']) ? trim($_POST['from_date']) : '';
+$to_date = isset($_POST['to_date']) ? trim($_POST['to_date']) : '';
+$month = null;
+$year = null;
+$month_name = '';
 
-// Fetch employee details
-$stmt = $conn->prepare("SELECT id, employee_id, name, department, week_off FROM users WHERE id = ? AND role = 'employee' AND (status = 'Working' OR status = 'Resign')");
+// Handle date range format
+if (!empty($from_date) && !empty($to_date)) {
+    $from_date_obj = new DateTime($from_date);
+    $to_date_obj = new DateTime($to_date);
+    $month_name = $from_date_obj->format('d M Y') . ' to ' . $to_date_obj->format('d M Y');
+} else {
+    // Fallback to old month/year format
+    $month = isset($_POST['month']) ? intval($_POST['month']) : date('m');
+    $year = isset($_POST['year']) ? intval($_POST['year']) : date('Y');
+    $from_date = date('Y-m-01', mktime(0, 0, 0, $month, 1, $year));
+    $to_date = date('Y-m-t', mktime(0, 0, 0, $month, 1, $year));
+    $month_name = date('F Y', mktime(0, 0, 0, $month, 1, $year));
+}
+
+// Fetch employee details including date_of_exit for resignation check
+$stmt = $conn->prepare("SELECT id, employee_id, name, department, week_off, status, date_of_exit FROM users WHERE id = ? AND role = 'employee' AND (status = 'Working' OR status = 'Resign')");
 $stmt->bind_param("i", $employee_id);
 $stmt->execute();
 $result = $stmt->get_result();
@@ -41,20 +58,40 @@ if ($result->num_rows === 0) {
 $employee = $result->fetch_assoc();
 $stmt->close();
 
-$days_in_month = cal_days_in_month(CAL_GREGORIAN, $month, $year);
-$month_name = date('F Y', mktime(0, 0, 0, $month, 1, $year));
+// Check if employee has resigned and if export date range is after resignation
+$employee_resigned = ($employee['status'] === 'Resign' && !empty($employee['date_of_exit']));
+$resign_date = $employee_resigned ? new DateTime($employee['date_of_exit']) : null;
+$resign_month_end = null;
+if ($employee_resigned) {
+    // Get the last day of the resignation month
+    $resign_month_end = new DateTime($employee['date_of_exit']);
+    $resign_month_end->modify('last day of this month');
+}
 
-// Helper function to check status for a date
-function getStatusForDate($conn, $user_id, $date, $week_off, $month, $year) {
-    $date_obj = date('Y-m-d', mktime(0, 0, 0, $month, $date, $year));
-    $day_name = date('l', strtotime($date_obj));
+// Get the date range in a proper format
+$from_date_obj = new DateTime($from_date);
+$to_date_obj = new DateTime($to_date);
+
+// If employee resigned and the from_date is after their resignation month, don't export
+if ($employee_resigned && $from_date_obj > $resign_month_end) {
+    // Redirect back with message about resigned employee
+    session_start();
+    $_SESSION['message'] = "This employee resigned on " . $resign_date->format('Y-m-d') . ". Cannot export data after resignation month.";
+    header("Location: export_monthly.php");
+    exit();
+}
+
+// Helper function to check status for a specific date (new version using date string)
+function getStatusForDateByString($conn, $user_id, $date_str, $week_off) {
+    $date_obj = new DateTime($date_str);
+    $day_name = $date_obj->format('l');
     
     if ($week_off === $day_name) {
         return 'WO';
     }
     
     $stmt_od = $conn->prepare("SELECT id FROM od_records WHERE user_id = ? AND od_date = ?");
-    $stmt_od->bind_param("is", $user_id, $date_obj);
+    $stmt_od->bind_param("is", $user_id, $date_str);
     $stmt_od->execute();
     $result_od = $stmt_od->get_result();
     if ($result_od->num_rows > 0) {
@@ -65,14 +102,14 @@ function getStatusForDate($conn, $user_id, $date, $week_off, $month, $year) {
     
     // Check if there's a comp off for this date
     $stmt_co = $conn->prepare("SELECT id FROM comp_off_requests WHERE user_id = ? AND comp_off_date = ?");
-    $stmt_co->bind_param("is", $user_id, $date_obj);
+    $stmt_co->bind_param("is", $user_id, $date_str);
     $stmt_co->execute();
     $result_co = $stmt_co->get_result();
     $has_comp_off = $result_co->num_rows > 0;
     $stmt_co->close();
     
     $stmt_att = $conn->prepare("SELECT status FROM attendance WHERE user_id = ? AND DATE(date) = ?");
-    $stmt_att->bind_param("is", $user_id, $date_obj);
+    $stmt_att->bind_param("is", $user_id, $date_str);
     $stmt_att->execute();
     $result_att = $stmt_att->get_result();
     
@@ -93,6 +130,12 @@ function getStatusForDate($conn, $user_id, $date, $week_off, $month, $year) {
         return 'ADJ';
     }
     return 'A';
+}
+
+// Helper function to check status for a date (old version for backward compatibility)
+function getStatusForDate($conn, $user_id, $date, $week_off, $month, $year) {
+    $date_obj = date('Y-m-d', mktime(0, 0, 0, $month, $date, $year));
+    return getStatusForDateByString($conn, $user_id, $date_obj, $week_off);
 }
 
 function extractTimeFromTimestamp($timestamp) {
@@ -116,8 +159,8 @@ function extractTimeFromTimestamp($timestamp) {
     return (strlen($timestamp) >= 5) ? substr($timestamp, 0, 5) : '-';
 }
 
-function getPunchTimes($conn, $user_id, $date, $month, $year) {
-    $date_obj = date('Y-m-d', mktime(0, 0, 0, $month, $date, $year));
+// Get punch times by date string
+function getPunchTimesByDateString($conn, $user_id, $date_str) {
     $stmt = $conn->prepare("
         SELECT 
             MIN(punch_in) as first_punch_in, 
@@ -127,7 +170,7 @@ function getPunchTimes($conn, $user_id, $date, $month, $year) {
         FROM attendance 
         WHERE user_id = ? AND DATE(date) = ?
     ");
-    $stmt->bind_param("is", $user_id, $date_obj);
+    $stmt->bind_param("is", $user_id, $date_str);
     $stmt->execute();
     $result = $stmt->get_result();
     
@@ -138,6 +181,12 @@ function getPunchTimes($conn, $user_id, $date, $month, $year) {
     }
     $stmt->close();
     return null;
+}
+
+// Old version for backward compatibility
+function getPunchTimes($conn, $user_id, $date, $month, $year) {
+    $date_obj = date('Y-m-d', mktime(0, 0, 0, $month, $date, $year));
+    return getPunchTimesByDateString($conn, $user_id, $date_obj);
 }
 
 function calculateHours($punch_in, $punch_out) {
@@ -162,13 +211,17 @@ function calculateHours($punch_in, $punch_out) {
 
 function getCompOffDate($conn, $employee_id, $day, $month, $year) {
     $date = sprintf("%04d-%02d-%02d", $year, $month, $day);
+    return getCompOffDateByString($conn, $employee_id, $date);
+}
+
+function getCompOffDateByString($conn, $employee_id, $date_str) {
     $stmt = $conn->prepare("SELECT earned_date FROM comp_off_requests WHERE user_id = ? AND comp_off_date = ?");
     
     if ($stmt === false) {
         return false;
     }
     
-    $stmt->bind_param("is", $employee_id, $date);
+    $stmt->bind_param("is", $employee_id, $date_str);
     $stmt->execute();
     $result = $stmt->get_result();
     if ($result->num_rows > 0) {
@@ -226,7 +279,17 @@ $sheet->getStyle('A' . $row)->setFont($titleFont);
 
 $sheet->getStyle('A' . $row)->getAlignment()->setHorizontal(Alignment::HORIZONTAL_LEFT);
 $sheet->getStyle('A' . $row)->getAlignment()->setVertical(Alignment::VERTICAL_CENTER);
-$sheet->mergeCells('A' . $row . ':' . Coordinate::stringFromColumnIndex($days_in_month + 1) . $row);
+
+// Generate array of all dates in the range
+$date_range = array();
+$current_date = clone $from_date_obj;
+while ($current_date <= $to_date_obj) {
+    $date_range[] = $current_date->format('Y-m-d');
+    $current_date->modify('+1 day');
+}
+$num_dates = count($date_range);
+
+$sheet->mergeCells('A' . $row . ':' . Coordinate::stringFromColumnIndex($num_dates + 1) . $row);
 $sheet->getRowDimension($row)->setRowHeight(25);
 $row += 2;
 
@@ -238,10 +301,6 @@ $sheet->getStyle('A' . $row)->applyFromArray([
 $sheet->getStyle('A' . $row)->getAlignment()->setHorizontal(Alignment::HORIZONTAL_LEFT);
 $sheet->getStyle('A' . $row)->getAlignment()->setVertical(Alignment::VERTICAL_CENTER);
 
-for ($col_idx = 2; $col_idx <= $days_in_month; $col_idx++) {
-    $col = Coordinate::stringFromColumnIndex($col_idx);
-}
-
 $sheet->getRowDimension($row)->setRowHeight(20);
 $row++;
 
@@ -251,23 +310,20 @@ $sheet->getStyle('A' . $row)->applyFromArray([
     'font' => ['bold' => true, 'size' => 11]
 ]);
 
-for ($col_idx = 2; $col_idx <= $days_in_month; $col_idx++) {
-    $col = Coordinate::stringFromColumnIndex($col_idx);
-}
-
 $sheet->getRowDimension($row)->setRowHeight(18);
 $row += 2;
 
 // Days header row (shown once, before all departments) - ONLY dates, no label
-for ($day = 1; $day <= $days_in_month; $day++) {
-    $date_obj = date('Y-m-d', mktime(0, 0, 0, $month, $day, $year));
+for ($day_idx = 0; $day_idx < $num_dates; $day_idx++) {
+    $date_str = $date_range[$day_idx];
+    $date_obj = new DateTime($date_str);
     // Format: "01-Sun"
-    $formatted_date = date('d-D', strtotime($date_obj));
-    if ($day === 1) {
+    $formatted_date = $date_obj->format('d-D');
+    if ($day_idx === 0) {
         $sheet->setCellValue('A' . $row, "");
         $sheet->getStyle('A' . $row)->applyFromArray(['font' => ['bold' => true, 'color' => ['rgb' => '000000']]]);
     }
-    $col = Coordinate::stringFromColumnIndex($day + 1);
+    $col = Coordinate::stringFromColumnIndex($day_idx + 2);
     $sheet->setCellValue($col . $row, $formatted_date);
     $sheet->getStyle($col . $row)->applyFromArray(['font' => ['bold' => true, 'color' => ['rgb' => '000000']]]);
     $sheet->getStyle($col . $row)->getAlignment()->setHorizontal(Alignment::HORIZONTAL_CENTER);
@@ -280,9 +336,17 @@ $row++;
 $sheet->setCellValue('A' . $row, "Status");
 $sheet->getStyle('A' . $row)->applyFromArray(['font' => ['bold' => true]]);
 
-for ($day = 1; $day <= $days_in_month; $day++) {
-    $status = getStatusForDate($conn, $employee['id'], $day, $employee['week_off'], $month, $year);
-    $col = Coordinate::stringFromColumnIndex($day + 1);
+for ($day_idx = 0; $day_idx < $num_dates; $day_idx++) {
+    $date_str = $date_range[$day_idx];
+    
+    // Check if this date is after resignation month
+    if ($employee_resigned && new DateTime($date_str) > $resign_month_end) {
+        $status = '-'; // Don't show data after resignation month
+    } else {
+        $status = getStatusForDateByString($conn, $employee['id'], $date_str, $employee['week_off']);
+    }
+    
+    $col = Coordinate::stringFromColumnIndex($day_idx + 2);
     $sheet->setCellValue($col . $row, $status);
     $sheet->getStyle($col . $row)->getAlignment()->setHorizontal(Alignment::HORIZONTAL_CENTER);
     $sheet->getStyle($col . $row)->getAlignment()->setVertical(Alignment::VERTICAL_CENTER);
@@ -293,10 +357,18 @@ $row++;
 $sheet->setCellValue('A' . $row, "In");
 $sheet->getStyle('A' . $row)->applyFromArray(['font' => ['bold' => true]]);
 
-for ($day = 1; $day <= $days_in_month; $day++) {
-    $times = getPunchTimes($conn, $employee['id'], $day, $month, $year);
-    $punch_in = $times && !empty($times['first_punch_in']) ? extractTimeFromTimestamp($times['first_punch_in']) : '-';
-    $col = Coordinate::stringFromColumnIndex($day + 1);
+for ($day_idx = 0; $day_idx < $num_dates; $day_idx++) {
+    $date_str = $date_range[$day_idx];
+    
+    // Check if this date is after resignation month
+    if ($employee_resigned && new DateTime($date_str) > $resign_month_end) {
+        $punch_in = '-';
+    } else {
+        $times = getPunchTimesByDateString($conn, $employee['id'], $date_str);
+        $punch_in = $times && !empty($times['first_punch_in']) ? extractTimeFromTimestamp($times['first_punch_in']) : '-';
+    }
+    
+    $col = Coordinate::stringFromColumnIndex($day_idx + 2);
     $sheet->setCellValue($col . $row, $punch_in);
     $sheet->getStyle($col . $row)->getAlignment()->setHorizontal(Alignment::HORIZONTAL_CENTER);
     $sheet->getStyle($col . $row)->getAlignment()->setVertical(Alignment::VERTICAL_CENTER);
@@ -307,10 +379,18 @@ $row++;
 $sheet->setCellValue('A' . $row, "Out");
 $sheet->getStyle('A' . $row)->applyFromArray(['font' => ['bold' => true]]);
 
-for ($day = 1; $day <= $days_in_month; $day++) {
-    $times = getPunchTimes($conn, $employee['id'], $day, $month, $year);
-    $punch_out = $times && !empty($times['last_punch_out']) ? extractTimeFromTimestamp($times['last_punch_out']) : '-';
-    $col = Coordinate::stringFromColumnIndex($day + 1);
+for ($day_idx = 0; $day_idx < $num_dates; $day_idx++) {
+    $date_str = $date_range[$day_idx];
+    
+    // Check if this date is after resignation month
+    if ($employee_resigned && new DateTime($date_str) > $resign_month_end) {
+        $punch_out = '-';
+    } else {
+        $times = getPunchTimesByDateString($conn, $employee['id'], $date_str);
+        $punch_out = $times && !empty($times['last_punch_out']) ? extractTimeFromTimestamp($times['last_punch_out']) : '-';
+    }
+    
+    $col = Coordinate::stringFromColumnIndex($day_idx + 2);
     $sheet->setCellValue($col . $row, $punch_out);
     $sheet->getStyle($col . $row)->getAlignment()->setHorizontal(Alignment::HORIZONTAL_CENTER);
     $sheet->getStyle($col . $row)->getAlignment()->setVertical(Alignment::VERTICAL_CENTER);
@@ -321,17 +401,25 @@ $row++;
 $sheet->setCellValue('A' . $row, "Total");
 $sheet->getStyle('A' . $row)->applyFromArray(['font' => ['bold' => true]]);
 
-for ($day = 1; $day <= $days_in_month; $day++) {
-    // Check if comp off exists for this date
-    $compOffDate = getCompOffDate($conn, $employee['id'], $day, $month, $year);
-    if ($compOffDate) {
-        $day_taken = date('d', strtotime($compOffDate));
-        $display = 'CO-' . $day_taken;
+for ($day_idx = 0; $day_idx < $num_dates; $day_idx++) {
+    $date_str = $date_range[$day_idx];
+    
+    // Check if this date is after resignation month
+    if ($employee_resigned && new DateTime($date_str) > $resign_month_end) {
+        $display = '-';
     } else {
-        $times = getPunchTimes($conn, $employee['id'], $day, $month, $year);
-        $display = calculateHours($times['first_punch_in'] ?? null, $times['last_punch_out'] ?? null);
+        // Check if comp off exists for this date
+        $compOffDate = getCompOffDateByString($conn, $employee['id'], $date_str);
+        if ($compOffDate) {
+            $day_taken = date('d', strtotime($compOffDate));
+            $display = 'CO-' . $day_taken;
+        } else {
+            $times = getPunchTimesByDateString($conn, $employee['id'], $date_str);
+            $display = calculateHours($times['first_punch_in'] ?? null, $times['last_punch_out'] ?? null);
+        }
     }
-    $col = Coordinate::stringFromColumnIndex($day + 1);
+    
+    $col = Coordinate::stringFromColumnIndex($day_idx + 2);
     $sheet->setCellValue($col . $row, $display);
     $sheet->getStyle($col . $row)->getAlignment()->setHorizontal(Alignment::HORIZONTAL_CENTER);
     $sheet->getStyle($col . $row)->getAlignment()->setVertical(Alignment::VERTICAL_CENTER);
@@ -342,10 +430,18 @@ $row += 2;
 $sheet->setCellValue('A' . $row, "In Location");
 $sheet->getStyle('A' . $row)->applyFromArray(['font' => ['bold' => true]]);
 
-for ($day = 1; $day <= $days_in_month; $day++) {
-    $times = getPunchTimes($conn, $employee['id'], $day, $month, $year);
-    $location = ($times && !empty($times['punch_in_location'])) ? getFullLocationName($times['punch_in_location'], $conn) : '-';
-    $col = Coordinate::stringFromColumnIndex($day + 1);
+for ($day_idx = 0; $day_idx < $num_dates; $day_idx++) {
+    $date_str = $date_range[$day_idx];
+    
+    // Check if this date is after resignation month
+    if ($employee_resigned && new DateTime($date_str) > $resign_month_end) {
+        $location = '-';
+    } else {
+        $times = getPunchTimesByDateString($conn, $employee['id'], $date_str);
+        $location = ($times && !empty($times['punch_in_location'])) ? getFullLocationName($times['punch_in_location'], $conn) : '-';
+    }
+    
+    $col = Coordinate::stringFromColumnIndex($day_idx + 2);
     $sheet->setCellValue($col . $row, $location);
     $sheet->getStyle($col . $row)->getAlignment()->setHorizontal(Alignment::HORIZONTAL_CENTER);
     $sheet->getStyle($col . $row)->getAlignment()->setVertical(Alignment::VERTICAL_CENTER);
@@ -356,10 +452,18 @@ $row++;
 $sheet->setCellValue('A' . $row, "Out Location");
 $sheet->getStyle('A' . $row)->applyFromArray(['font' => ['bold' => true]]);
 
-for ($day = 1; $day <= $days_in_month; $day++) {
-    $times = getPunchTimes($conn, $employee['id'], $day, $month, $year);
-    $location = ($times && !empty($times['punch_out_location'])) ? getFullLocationName($times['punch_out_location'], $conn) : '-';
-    $col = Coordinate::stringFromColumnIndex($day + 1);
+for ($day_idx = 0; $day_idx < $num_dates; $day_idx++) {
+    $date_str = $date_range[$day_idx];
+    
+    // Check if this date is after resignation month
+    if ($employee_resigned && new DateTime($date_str) > $resign_month_end) {
+        $location = '-';
+    } else {
+        $times = getPunchTimesByDateString($conn, $employee['id'], $date_str);
+        $location = ($times && !empty($times['punch_out_location'])) ? getFullLocationName($times['punch_out_location'], $conn) : '-';
+    }
+    
+    $col = Coordinate::stringFromColumnIndex($day_idx + 2);
     $sheet->setCellValue($col . $row, $location);
     $sheet->getStyle($col . $row)->getAlignment()->setHorizontal(Alignment::HORIZONTAL_CENTER);
     $sheet->getStyle($col . $row)->getAlignment()->setVertical(Alignment::VERTICAL_CENTER);
@@ -367,13 +471,13 @@ for ($day = 1; $day <= $days_in_month; $day++) {
 
 // Set column widths
 $sheet->getColumnDimension('A')->setWidth(20);
-for ($day = 1; $day <= $days_in_month; $day++) {
-    $col = Coordinate::stringFromColumnIndex($day + 1);
+for ($day_idx = 0; $day_idx < $num_dates; $day_idx++) {
+    $col = Coordinate::stringFromColumnIndex($day_idx + 2);
     $sheet->getColumnDimension($col)->setWidth(7);
 }
 
 // Apply black borders to entire used range
-$usedRange = 'A1:' . Coordinate::stringFromColumnIndex($days_in_month + 1) . $row;
+$usedRange = 'A1:' . Coordinate::stringFromColumnIndex($num_dates + 1) . $row;
 $borders = $sheet->getStyle($usedRange)->getBorders();
 $borders->getAllBorders()->setBorderStyle(Border::BORDER_THIN);
 

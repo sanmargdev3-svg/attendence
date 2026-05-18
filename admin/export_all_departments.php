@@ -63,7 +63,7 @@ $selected_companies = isset($_POST['companies']) && is_array($_POST['companies']
 
 // Build SQL query to fetch employees, optionally filtering by company
 $query = "
-    SELECT id, employee_id, name, department, location, week_off 
+    SELECT id, employee_id, name, department, location, week_off, status, date_of_exit 
     FROM users 
     WHERE role = 'employee' AND (status = 'Working' OR status = 'Resign')
 ";
@@ -85,6 +85,10 @@ if (count($selected_companies) > 0) {
 
 $stmt->execute();
 $result = $stmt->get_result();
+
+// Convert date_range to DateTime objects for comparison
+$from_date_obj = new DateTime($date_range[0]);
+$to_date_obj = new DateTime($date_range[count($date_range) - 1]);
 
 $employees_by_location = array();
 while ($row = $result->fetch_assoc()) {
@@ -258,6 +262,10 @@ function createLocationSheet($spreadsheet, $location, $employees_by_dept, $date_
     $sheet = $spreadsheet->createSheet();
     $sheet->setTitle(substr($location, 0, 31)); // Excel sheet name max 31 chars
     
+    // Get date range objects for comparison
+    $from_date_obj = new DateTime($date_range[0]);
+    $to_date_obj = new DateTime($date_range[count($date_range) - 1]);
+    
     $row = 1;
     
     // Title
@@ -296,6 +304,20 @@ function createLocationSheet($spreadsheet, $location, $employees_by_dept, $date_
         
         // Process each employee
         foreach ($employees as $emp) {
+            // Check if employee has resigned and if report period is after resignation
+            $emp_resigned = ($emp['status'] === 'Resign' && !empty($emp['date_of_exit']));
+            $resign_month_end = null;
+            if ($emp_resigned) {
+                // Get the last day of the resignation month
+                $resign_date = new DateTime($emp['date_of_exit']);
+                $resign_month_end = clone $resign_date;
+                $resign_month_end->modify('last day of this month');
+                // If employee resigned before the report period, skip them
+                if ($resign_month_end < $from_date_obj) {
+                    continue;
+                }
+            }
+            
             $emp_start_row = $row;
             
             // Employee name row
@@ -308,7 +330,12 @@ function createLocationSheet($spreadsheet, $location, $employees_by_dept, $date_
             $sheet->getStyle('A' . $row)->applyFromArray(['font' => ['bold' => true]]);
             
             foreach ($date_range as $day_index => $date_str) {
-                $status = getStatusForDate($conn, $emp['id'], $date_str, $emp['week_off']);
+                // Check if this date is after resignation month
+                if ($emp_resigned && new DateTime($date_str) > $resign_month_end) {
+                    $status = '-';
+                } else {
+                    $status = getStatusForDate($conn, $emp['id'], $date_str, $emp['week_off']);
+                }
                 $col = Coordinate::stringFromColumnIndex($day_index + 2);
                 $sheet->setCellValue($col . $row, $status);
                 $sheet->getStyle($col . $row)->getAlignment()->setHorizontal(Alignment::HORIZONTAL_CENTER);
@@ -321,8 +348,13 @@ function createLocationSheet($spreadsheet, $location, $employees_by_dept, $date_
             $sheet->getStyle('A' . $row)->applyFromArray(['font' => ['bold' => true]]);
             
             foreach ($date_range as $day_index => $date_str) {
-                $times = getPunchTimes($conn, $emp['id'], $date_str);
-                $punch_in = $times && !empty($times['first_punch_in']) ? extractTimeFromTimestamp($times['first_punch_in']) : '-';
+                // Check if this date is after resignation month
+                if ($emp_resigned && new DateTime($date_str) > $resign_month_end) {
+                    $punch_in = '-';
+                } else {
+                    $times = getPunchTimes($conn, $emp['id'], $date_str);
+                    $punch_in = $times && !empty($times['first_punch_in']) ? extractTimeFromTimestamp($times['first_punch_in']) : '-';
+                }
                 $col = Coordinate::stringFromColumnIndex($day_index + 2);
                 $sheet->setCellValue($col . $row, $punch_in);
                 $sheet->getStyle($col . $row)->getAlignment()->setHorizontal(Alignment::HORIZONTAL_CENTER);
@@ -335,8 +367,13 @@ function createLocationSheet($spreadsheet, $location, $employees_by_dept, $date_
             $sheet->getStyle('A' . $row)->applyFromArray(['font' => ['bold' => true]]);
             
             foreach ($date_range as $day_index => $date_str) {
-                $times = getPunchTimes($conn, $emp['id'], $date_str);
-                $punch_out = $times && !empty($times['last_punch_out']) ? extractTimeFromTimestamp($times['last_punch_out']) : '-';
+                // Check if this date is after resignation month
+                if ($emp_resigned && new DateTime($date_str) > $resign_month_end) {
+                    $punch_out = '-';
+                } else {
+                    $times = getPunchTimes($conn, $emp['id'], $date_str);
+                    $punch_out = $times && !empty($times['last_punch_out']) ? extractTimeFromTimestamp($times['last_punch_out']) : '-';
+                }
                 $col = Coordinate::stringFromColumnIndex($day_index + 2);
                 $sheet->setCellValue($col . $row, $punch_out);
                 $sheet->getStyle($col . $row)->getAlignment()->setHorizontal(Alignment::HORIZONTAL_CENTER);
@@ -349,13 +386,18 @@ function createLocationSheet($spreadsheet, $location, $employees_by_dept, $date_
             $sheet->getStyle('A' . $row)->applyFromArray(['font' => ['bold' => true]]);
             
             foreach ($date_range as $day_index => $date_str) {
-                $compOffDate = getCompOffDate($conn, $emp['id'], $date_str);
-                if ($compOffDate) {
-                    $day_taken = date('d', strtotime($compOffDate));
-                    $display = 'CO-' . $day_taken;
+                // Check if this date is after resignation month
+                if ($emp_resigned && new DateTime($date_str) > $resign_month_end) {
+                    $display = '-';
                 } else {
-                    $times = getPunchTimes($conn, $emp['id'], $date_str);
-                    $display = calculateHours($times['first_punch_in'] ?? null, $times['last_punch_out'] ?? null);
+                    $compOffDate = getCompOffDate($conn, $emp['id'], $date_str);
+                    if ($compOffDate) {
+                        $day_taken = date('d', strtotime($compOffDate));
+                        $display = 'CO-' . $day_taken;
+                    } else {
+                        $times = getPunchTimes($conn, $emp['id'], $date_str);
+                        $display = calculateHours($times['first_punch_in'] ?? null, $times['last_punch_out'] ?? null);
+                    }
                 }
                 $col = Coordinate::stringFromColumnIndex($day_index + 2);
                 $sheet->setCellValue($col . $row, $display);

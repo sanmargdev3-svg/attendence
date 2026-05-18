@@ -46,11 +46,11 @@ if ($selected_department === 'all' && !empty($selected_location)) {
     // Fetch all employees by location
     if (count($selected_companies) > 0) {
         $placeholders = implode(',', array_fill(0, count($selected_companies), '?'));
-        $stmt = $conn->prepare("SELECT id, employee_id, name, department, location FROM users WHERE role = 'employee' AND (status = 'Working' OR status = 'Resign') AND location = ? AND company IN ($placeholders) ORDER BY department, name");
+        $stmt = $conn->prepare("SELECT id, employee_id, name, department, location, status, date_of_exit FROM users WHERE role = 'employee' AND (status = 'Working' OR status = 'Resign') AND location = ? AND company IN ($placeholders) ORDER BY department, name");
         $types = 's' . str_repeat('s', count($selected_companies));
         $stmt->bind_param($types, $selected_location, ...$selected_companies);
     } else {
-        $stmt = $conn->prepare("SELECT id, employee_id, name, department, location FROM users WHERE role = 'employee' AND (status = 'Working' OR status = 'Resign') AND location = ? ORDER BY department, name");
+        $stmt = $conn->prepare("SELECT id, employee_id, name, department, location, status, date_of_exit FROM users WHERE role = 'employee' AND (status = 'Working' OR status = 'Resign') AND location = ? ORDER BY department, name");
         $stmt->bind_param("s", $selected_location);
     }
     $stmt->execute();
@@ -63,10 +63,10 @@ if ($selected_department === 'all' && !empty($selected_location)) {
     // Fetch all employees grouped by department
     if (count($selected_companies) > 0) {
         $placeholders = implode(',', array_fill(0, count($selected_companies), '?'));
-        $stmt = $conn->prepare("SELECT id, employee_id, name, department, location FROM users WHERE role = 'employee' AND (status = 'Working' OR status = 'Resign') AND company IN ($placeholders) ORDER BY department, name");
+        $stmt = $conn->prepare("SELECT id, employee_id, name, department, location, status, date_of_exit FROM users WHERE role = 'employee' AND (status = 'Working' OR status = 'Resign') AND company IN ($placeholders) ORDER BY department, name");
         $stmt->bind_param(str_repeat('s', count($selected_companies)), ...$selected_companies);
     } else {
-        $stmt = $conn->prepare("SELECT id, employee_id, name, department, location FROM users WHERE role = 'employee' AND (status = 'Working' OR status = 'Resign') ORDER BY department, name");
+        $stmt = $conn->prepare("SELECT id, employee_id, name, department, location, status, date_of_exit FROM users WHERE role = 'employee' AND (status = 'Working' OR status = 'Resign') ORDER BY department, name");
     }
     $stmt->execute();
     $result = $stmt->get_result();
@@ -78,11 +78,11 @@ if ($selected_department === 'all' && !empty($selected_location)) {
     // Fetch employees for selected department and location
     if (count($selected_companies) > 0) {
         $placeholders = implode(',', array_fill(0, count($selected_companies), '?'));
-        $stmt = $conn->prepare("SELECT id, employee_id, name, department, location FROM users WHERE department = ? AND location = ? AND (status = 'Working' OR status = 'Resign') AND company IN ($placeholders) ORDER BY name");
+        $stmt = $conn->prepare("SELECT id, employee_id, name, department, location, status, date_of_exit FROM users WHERE department = ? AND location = ? AND (status = 'Working' OR status = 'Resign') AND company IN ($placeholders) ORDER BY name");
         $types = 'ss' . str_repeat('s', count($selected_companies));
         $stmt->bind_param($types, $selected_department, $selected_location, ...$selected_companies);
     } else {
-        $stmt = $conn->prepare("SELECT id, employee_id, name, department, location FROM users WHERE department = ? AND location = ? AND (status = 'Working' OR status = 'Resign') ORDER BY name");
+        $stmt = $conn->prepare("SELECT id, employee_id, name, department, location, status, date_of_exit FROM users WHERE department = ? AND location = ? AND (status = 'Working' OR status = 'Resign') ORDER BY name");
         $stmt->bind_param("ss", $selected_department, $selected_location);
     }
     $stmt->execute();
@@ -95,11 +95,11 @@ if ($selected_department === 'all' && !empty($selected_location)) {
     // Fetch employees for selected department
     if (count($selected_companies) > 0) {
         $placeholders = implode(',', array_fill(0, count($selected_companies), '?'));
-        $stmt = $conn->prepare("SELECT id, employee_id, name, department, location FROM users WHERE department = ? AND (status = 'Working' OR status = 'Resign') AND company IN ($placeholders) ORDER BY name");
+        $stmt = $conn->prepare("SELECT id, employee_id, name, department, location, status, date_of_exit FROM users WHERE department = ? AND (status = 'Working' OR status = 'Resign') AND company IN ($placeholders) ORDER BY name");
         $types = 's' . str_repeat('s', count($selected_companies));
         $stmt->bind_param($types, $selected_department, ...$selected_companies);
     } else {
-        $stmt = $conn->prepare("SELECT id, employee_id, name, department, location FROM users WHERE department = ? AND (status = 'Working' OR status = 'Resign') ORDER BY name");
+        $stmt = $conn->prepare("SELECT id, employee_id, name, department, location, status, date_of_exit FROM users WHERE department = ? AND (status = 'Working' OR status = 'Resign') ORDER BY name");
         $stmt->bind_param("s", $selected_department);
     }
     $stmt->execute();
@@ -336,28 +336,14 @@ if ($selected_department === 'all' && !empty($selected_location)) {
                                                             <input type="hidden" name="employee_name" value="<?php echo htmlspecialchars($employee['name']); ?>">
                                                             
                                                             <div class="form-group mb-3">
-                                                                <label for="month<?php echo $employee['id']; ?>" class="form-label">Month:</label>
-                                                                <select name="month" id="month<?php echo $employee['id']; ?>" class="form-control" required>
-                                                                    <option value="">Select Month</option>
-                                                                    <option value="1" <?php echo (date('m') == '01') ? 'selected' : ''; ?>>January</option>
-                                                                    <option value="2" <?php echo (date('m') == '02') ? 'selected' : ''; ?>>February</option>
-                                                                    <option value="3" <?php echo (date('m') == '03') ? 'selected' : ''; ?>>March</option>
-                                                                    <option value="4" <?php echo (date('m') == '04') ? 'selected' : ''; ?>>April</option>
-                                                                    <option value="5" <?php echo (date('m') == '05') ? 'selected' : ''; ?>>May</option>
-                                                                    <option value="6" <?php echo (date('m') == '06') ? 'selected' : ''; ?>>June</option>
-                                                                    <option value="7" <?php echo (date('m') == '07') ? 'selected' : ''; ?>>July</option>
-                                                                    <option value="8" <?php echo (date('m') == '08') ? 'selected' : ''; ?>>August</option>
-                                                                    <option value="9" <?php echo (date('m') == '09') ? 'selected' : ''; ?>>September</option>
-                                                                    <option value="10" <?php echo (date('m') == '10') ? 'selected' : ''; ?>>October</option>
-                                                                    <option value="11" <?php echo (date('m') == '11') ? 'selected' : ''; ?>>November</option>
-                                                                    <option value="12" <?php echo (date('m') == '12') ? 'selected' : ''; ?>>December</option>
-                                                                </select>
-                                                            </div>
-
-                                                            <div class="form-group mb-3">
-                                                                <label for="year<?php echo $employee['id']; ?>" class="form-label">Year:</label>
-                                                                <input type="number" name="year" id="year<?php echo $employee['id']; ?>" 
-                                                                       class="form-control" value="<?php echo date('Y'); ?>" required>
+                                                                <label for="dateRangeEmployee<?php echo $employee['id']; ?>" class="form-label">
+                                                                    <i class="fas fa-calendar"></i> Select Date Range:
+                                                                </label>
+                                                                <input type="text" id="dateRangeEmployee<?php echo $employee['id']; ?>" name="dateRange" 
+                                                                       class="form-control date-range-picker" placeholder="From Date - To Date" required>
+                                                                <small class="text-muted">Click to open calendar and select start and end dates</small>
+                                                                <input type="hidden" name="from_date" id="fromDateEmployee<?php echo $employee['id']; ?>">
+                                                                <input type="hidden" name="to_date" id="toDateEmployee<?php echo $employee['id']; ?>">
                                                             </div>
                                                         </div>
                                                         <div class="modal-footer">
@@ -420,28 +406,14 @@ if ($selected_department === 'all' && !empty($selected_location)) {
                                                 <input type="hidden" name="employee_name" value="<?php echo htmlspecialchars($employee['name']); ?>">
                                                 
                                                 <div class="form-group mb-3">
-                                                    <label for="month<?php echo $employee['id']; ?>" class="form-label">Month:</label>
-                                                    <select name="month" id="month<?php echo $employee['id']; ?>" class="form-control" required>
-                                                        <option value="">Select Month</option>
-                                                        <option value="1" <?php echo (date('m') == '01') ? 'selected' : ''; ?>>January</option>
-                                                        <option value="2" <?php echo (date('m') == '02') ? 'selected' : ''; ?>>February</option>
-                                                        <option value="3" <?php echo (date('m') == '03') ? 'selected' : ''; ?>>March</option>
-                                                        <option value="4" <?php echo (date('m') == '04') ? 'selected' : ''; ?>>April</option>
-                                                        <option value="5" <?php echo (date('m') == '05') ? 'selected' : ''; ?>>May</option>
-                                                        <option value="6" <?php echo (date('m') == '06') ? 'selected' : ''; ?>>June</option>
-                                                        <option value="7" <?php echo (date('m') == '07') ? 'selected' : ''; ?>>July</option>
-                                                        <option value="8" <?php echo (date('m') == '08') ? 'selected' : ''; ?>>August</option>
-                                                        <option value="9" <?php echo (date('m') == '09') ? 'selected' : ''; ?>>September</option>
-                                                        <option value="10" <?php echo (date('m') == '10') ? 'selected' : ''; ?>>October</option>
-                                                        <option value="11" <?php echo (date('m') == '11') ? 'selected' : ''; ?>>November</option>
-                                                        <option value="12" <?php echo (date('m') == '12') ? 'selected' : ''; ?>>December</option>
-                                                    </select>
-                                                </div>
-
-                                                <div class="form-group mb-3">
-                                                    <label for="year<?php echo $employee['id']; ?>" class="form-label">Year:</label>
-                                                    <input type="number" name="year" id="year<?php echo $employee['id']; ?>" 
-                                                           class="form-control" value="<?php echo date('Y'); ?>" required>
+                                                    <label for="dateRangeEmployee<?php echo $employee['id']; ?>" class="form-label">
+                                                        <i class="fas fa-calendar"></i> Select Date Range:
+                                                    </label>
+                                                    <input type="text" id="dateRangeEmployee<?php echo $employee['id']; ?>" name="dateRange" 
+                                                           class="form-control date-range-picker" placeholder="From Date - To Date" required>
+                                                    <small class="text-muted">Click to open calendar and select start and end dates</small>
+                                                    <input type="hidden" name="from_date" id="fromDateEmployee<?php echo $employee['id']; ?>">
+                                                    <input type="hidden" name="to_date" id="toDateEmployee<?php echo $employee['id']; ?>">
                                                 </div>
                                             </div>
                                             <div class="modal-footer">
@@ -517,29 +489,17 @@ if ($selected_department === 'all' && !empty($selected_location)) {
             <form method="POST" action="export_location_excel.php">
                 <div class="modal-body">
                     <input type="hidden" name="location" value="<?php echo htmlspecialchars($selected_location); ?>">
+                    <input type="hidden" name="department" value="<?php echo htmlspecialchars($selected_department); ?>">
                     
                     <div class="form-group mb-3">
-                        <label for="exportLocationMonth" class="form-label">Month:</label>
-                        <select name="month" id="exportLocationMonth" class="form-control" required>
-                            <option value="">Select Month</option>
-                            <option value="1" <?php echo (date('m') == '01') ? 'selected' : ''; ?>>January</option>
-                            <option value="2" <?php echo (date('m') == '02') ? 'selected' : ''; ?>>February</option>
-                            <option value="3" <?php echo (date('m') == '03') ? 'selected' : ''; ?>>March</option>
-                            <option value="4" <?php echo (date('m') == '04') ? 'selected' : ''; ?>>April</option>
-                            <option value="5" <?php echo (date('m') == '05') ? 'selected' : ''; ?>>May</option>
-                            <option value="6" <?php echo (date('m') == '06') ? 'selected' : ''; ?>>June</option>
-                            <option value="7" <?php echo (date('m') == '07') ? 'selected' : ''; ?>>July</option>
-                            <option value="8" <?php echo (date('m') == '08') ? 'selected' : ''; ?>>August</option>
-                            <option value="9" <?php echo (date('m') == '09') ? 'selected' : ''; ?>>September</option>
-                            <option value="10" <?php echo (date('m') == '10') ? 'selected' : ''; ?>>October</option>
-                            <option value="11" <?php echo (date('m') == '11') ? 'selected' : ''; ?>>November</option>
-                            <option value="12" <?php echo (date('m') == '12') ? 'selected' : ''; ?>>December</option>
-                        </select>
-                    </div>
-
-                    <div class="form-group mb-3">
-                        <label for="exportLocationYear" class="form-label">Year:</label>
-                        <input type="number" name="year" id="exportLocationYear" class="form-control" value="<?php echo date('Y'); ?>" required>
+                        <label for="exportLocationDateRange" class="form-label">
+                            <i class="fas fa-calendar"></i> Select Date Range:
+                        </label>
+                        <input type="text" id="exportLocationDateRange" name="dateRange" 
+                               class="form-control date-range-picker" placeholder="From Date - To Date" required>
+                        <small class="text-muted">Click to open calendar and select start and end dates</small>
+                        <input type="hidden" name="from_date" id="exportLocationFromDate">
+                        <input type="hidden" name="to_date" id="exportLocationToDate">
                     </div>
                 </div>
                 <div class="modal-footer">
@@ -601,7 +561,8 @@ document.addEventListener('DOMContentLoaded', function() {
     const dateRangePickers = document.querySelectorAll('.date-range-picker');
     
     dateRangePickers.forEach(picker => {
-        const employeeId = picker.getAttribute('id').replace('dateRange', '').replace('exportAllDateRange', 'exportAll');
+        const pickerId = picker.getAttribute('id');
+        
         flatpickr(picker, {
             mode: 'range',
             dateFormat: 'Y-m-d',
@@ -619,14 +580,22 @@ document.addEventListener('DOMContentLoaded', function() {
                     const fromDate = selectedDates[0];
                     const toDate = selectedDates[1];
                     
-                    // Determine which ID pattern to use
+                    // Determine which ID pattern this picker follows
                     let fromDateId, toDateId;
-                    if (picker.getAttribute('id') === 'exportAllDateRange') {
+                    
+                    if (pickerId === 'exportAllDateRange') {
+                        // All departments export
                         fromDateId = 'exportAllFromDate';
                         toDateId = 'exportAllToDate';
-                    } else {
-                        fromDateId = 'fromDate' + employeeId;
-                        toDateId = 'toDate' + employeeId;
+                    } else if (pickerId === 'exportLocationDateRange') {
+                        // Location export
+                        fromDateId = 'exportLocationFromDate';
+                        toDateId = 'exportLocationToDate';
+                    } else if (pickerId.startsWith('dateRangeEmployee')) {
+                        // Individual employee export
+                        const employeeId = pickerId.replace('dateRangeEmployee', '');
+                        fromDateId = 'fromDateEmployee' + employeeId;
+                        toDateId = 'toDateEmployee' + employeeId;
                     }
                     
                     // Update hidden inputs with the date values
