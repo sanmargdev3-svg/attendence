@@ -41,17 +41,43 @@ $selected_location = isset($_POST['location']) ? $_POST['location'] : '';
 $selected_companies = isset($_POST['companies']) ? (is_array($_POST['companies']) ? $_POST['companies'] : array()) : array();
 $employees = array();
 
+// Pagination setup
+$items_per_page = 50; // Show 50 employees per page
+$current_page = isset($_GET['page']) ? max(1, intval($_GET['page'])) : 1;
+$offset = ($current_page - 1) * $items_per_page;
+$total_employees = 0;
+
 // Fetch employees for selected department and location
 if ($selected_department === 'all' && !empty($selected_location)) {
     // Fetch all employees by location
     if (count($selected_companies) > 0) {
         $placeholders = implode(',', array_fill(0, count($selected_companies), '?'));
-        $stmt = $conn->prepare("SELECT id, employee_id, name, department, location, status, date_of_exit FROM users WHERE role = 'employee' AND (status = 'Working' OR status = 'Resign') AND location = ? AND company IN ($placeholders) ORDER BY department, name");
+        // Get total count
+        $stmt_count = $conn->prepare("SELECT COUNT(*) as total FROM users WHERE role = 'employee' AND (status = 'Working' OR status = 'Resign') AND location = ? AND company IN ($placeholders)");
         $types = 's' . str_repeat('s', count($selected_companies));
-        $stmt->bind_param($types, $selected_location, ...$selected_companies);
+        $stmt_count->bind_param($types, $selected_location, ...$selected_companies);
+        $stmt_count->execute();
+        $count_result = $stmt_count->get_result();
+        $total_employees = $count_result->fetch_assoc()['total'];
+        $stmt_count->close();
+        
+        // Get paginated results
+        $stmt = $conn->prepare("SELECT id, employee_id, name, department, location, status, date_of_exit FROM users WHERE role = 'employee' AND (status = 'Working' OR status = 'Resign') AND location = ? AND company IN ($placeholders) ORDER BY department, name LIMIT ? OFFSET ?");
+        $types = 's' . str_repeat('s', count($selected_companies)) . 'ii';
+        $params = array_merge([$selected_location], $selected_companies, [$items_per_page, $offset]);
+        $stmt->bind_param($types, ...$params);
     } else {
-        $stmt = $conn->prepare("SELECT id, employee_id, name, department, location, status, date_of_exit FROM users WHERE role = 'employee' AND (status = 'Working' OR status = 'Resign') AND location = ? ORDER BY department, name");
-        $stmt->bind_param("s", $selected_location);
+        // Get total count
+        $stmt_count = $conn->prepare("SELECT COUNT(*) as total FROM users WHERE role = 'employee' AND (status = 'Working' OR status = 'Resign') AND location = ?");
+        $stmt_count->bind_param("s", $selected_location);
+        $stmt_count->execute();
+        $count_result = $stmt_count->get_result();
+        $total_employees = $count_result->fetch_assoc()['total'];
+        $stmt_count->close();
+        
+        // Get paginated results
+        $stmt = $conn->prepare("SELECT id, employee_id, name, department, location, status, date_of_exit FROM users WHERE role = 'employee' AND (status = 'Working' OR status = 'Resign') AND location = ? ORDER BY department, name LIMIT ? OFFSET ?");
+        $stmt->bind_param("sii", $selected_location, $items_per_page, $offset);
     }
     $stmt->execute();
     $result = $stmt->get_result();
@@ -63,10 +89,30 @@ if ($selected_department === 'all' && !empty($selected_location)) {
     // Fetch all employees grouped by department
     if (count($selected_companies) > 0) {
         $placeholders = implode(',', array_fill(0, count($selected_companies), '?'));
-        $stmt = $conn->prepare("SELECT id, employee_id, name, department, location, status, date_of_exit FROM users WHERE role = 'employee' AND (status = 'Working' OR status = 'Resign') AND company IN ($placeholders) ORDER BY department, name");
-        $stmt->bind_param(str_repeat('s', count($selected_companies)), ...$selected_companies);
+        // Get total count
+        $stmt_count = $conn->prepare("SELECT COUNT(*) as total FROM users WHERE role = 'employee' AND (status = 'Working' OR status = 'Resign') AND company IN ($placeholders)");
+        $stmt_count->bind_param(str_repeat('s', count($selected_companies)), ...$selected_companies);
+        $stmt_count->execute();
+        $count_result = $stmt_count->get_result();
+        $total_employees = $count_result->fetch_assoc()['total'];
+        $stmt_count->close();
+        
+        // Get paginated results
+        $stmt = $conn->prepare("SELECT id, employee_id, name, department, location, status, date_of_exit FROM users WHERE role = 'employee' AND (status = 'Working' OR status = 'Resign') AND company IN ($placeholders) ORDER BY department, name LIMIT ? OFFSET ?");
+        $types = str_repeat('s', count($selected_companies)) . 'ii';
+        $params = array_merge($selected_companies, [$items_per_page, $offset]);
+        $stmt->bind_param($types, ...$params);
     } else {
-        $stmt = $conn->prepare("SELECT id, employee_id, name, department, location, status, date_of_exit FROM users WHERE role = 'employee' AND (status = 'Working' OR status = 'Resign') ORDER BY department, name");
+        // Get total count
+        $stmt_count = $conn->prepare("SELECT COUNT(*) as total FROM users WHERE role = 'employee' AND (status = 'Working' OR status = 'Resign')");
+        $stmt_count->execute();
+        $count_result = $stmt_count->get_result();
+        $total_employees = $count_result->fetch_assoc()['total'];
+        $stmt_count->close();
+        
+        // Get paginated results
+        $stmt = $conn->prepare("SELECT id, employee_id, name, department, location, status, date_of_exit FROM users WHERE role = 'employee' AND (status = 'Working' OR status = 'Resign') ORDER BY department, name LIMIT ? OFFSET ?");
+        $stmt->bind_param("ii", $items_per_page, $offset);
     }
     $stmt->execute();
     $result = $stmt->get_result();
@@ -78,12 +124,32 @@ if ($selected_department === 'all' && !empty($selected_location)) {
     // Fetch employees for selected department and location
     if (count($selected_companies) > 0) {
         $placeholders = implode(',', array_fill(0, count($selected_companies), '?'));
-        $stmt = $conn->prepare("SELECT id, employee_id, name, department, location, status, date_of_exit FROM users WHERE department = ? AND location = ? AND (status = 'Working' OR status = 'Resign') AND company IN ($placeholders) ORDER BY name");
+        // Get total count
+        $stmt_count = $conn->prepare("SELECT COUNT(*) as total FROM users WHERE department = ? AND location = ? AND (status = 'Working' OR status = 'Resign') AND company IN ($placeholders)");
         $types = 'ss' . str_repeat('s', count($selected_companies));
-        $stmt->bind_param($types, $selected_department, $selected_location, ...$selected_companies);
+        $stmt_count->bind_param($types, $selected_department, $selected_location, ...$selected_companies);
+        $stmt_count->execute();
+        $count_result = $stmt_count->get_result();
+        $total_employees = $count_result->fetch_assoc()['total'];
+        $stmt_count->close();
+        
+        // Get paginated results
+        $stmt = $conn->prepare("SELECT id, employee_id, name, department, location, status, date_of_exit FROM users WHERE department = ? AND location = ? AND (status = 'Working' OR status = 'Resign') AND company IN ($placeholders) ORDER BY name LIMIT ? OFFSET ?");
+        $types = 'ss' . str_repeat('s', count($selected_companies)) . 'ii';
+        $params = array_merge([$selected_department, $selected_location], $selected_companies, [$items_per_page, $offset]);
+        $stmt->bind_param($types, ...$params);
     } else {
-        $stmt = $conn->prepare("SELECT id, employee_id, name, department, location, status, date_of_exit FROM users WHERE department = ? AND location = ? AND (status = 'Working' OR status = 'Resign') ORDER BY name");
-        $stmt->bind_param("ss", $selected_department, $selected_location);
+        // Get total count
+        $stmt_count = $conn->prepare("SELECT COUNT(*) as total FROM users WHERE department = ? AND location = ? AND (status = 'Working' OR status = 'Resign')");
+        $stmt_count->bind_param("ss", $selected_department, $selected_location);
+        $stmt_count->execute();
+        $count_result = $stmt_count->get_result();
+        $total_employees = $count_result->fetch_assoc()['total'];
+        $stmt_count->close();
+        
+        // Get paginated results
+        $stmt = $conn->prepare("SELECT id, employee_id, name, department, location, status, date_of_exit FROM users WHERE department = ? AND location = ? AND (status = 'Working' OR status = 'Resign') ORDER BY name LIMIT ? OFFSET ?");
+        $stmt->bind_param("ssii", $selected_department, $selected_location, $items_per_page, $offset);
     }
     $stmt->execute();
     $result = $stmt->get_result();
@@ -95,12 +161,32 @@ if ($selected_department === 'all' && !empty($selected_location)) {
     // Fetch employees for selected department
     if (count($selected_companies) > 0) {
         $placeholders = implode(',', array_fill(0, count($selected_companies), '?'));
-        $stmt = $conn->prepare("SELECT id, employee_id, name, department, location, status, date_of_exit FROM users WHERE department = ? AND (status = 'Working' OR status = 'Resign') AND company IN ($placeholders) ORDER BY name");
+        // Get total count
+        $stmt_count = $conn->prepare("SELECT COUNT(*) as total FROM users WHERE department = ? AND (status = 'Working' OR status = 'Resign') AND company IN ($placeholders)");
         $types = 's' . str_repeat('s', count($selected_companies));
-        $stmt->bind_param($types, $selected_department, ...$selected_companies);
+        $stmt_count->bind_param($types, $selected_department, ...$selected_companies);
+        $stmt_count->execute();
+        $count_result = $stmt_count->get_result();
+        $total_employees = $count_result->fetch_assoc()['total'];
+        $stmt_count->close();
+        
+        // Get paginated results
+        $stmt = $conn->prepare("SELECT id, employee_id, name, department, location, status, date_of_exit FROM users WHERE department = ? AND (status = 'Working' OR status = 'Resign') AND company IN ($placeholders) ORDER BY name LIMIT ? OFFSET ?");
+        $types = 's' . str_repeat('s', count($selected_companies)) . 'ii';
+        $params = array_merge([$selected_department], $selected_companies, [$items_per_page, $offset]);
+        $stmt->bind_param($types, ...$params);
     } else {
-        $stmt = $conn->prepare("SELECT id, employee_id, name, department, location, status, date_of_exit FROM users WHERE department = ? AND (status = 'Working' OR status = 'Resign') ORDER BY name");
-        $stmt->bind_param("s", $selected_department);
+        // Get total count
+        $stmt_count = $conn->prepare("SELECT COUNT(*) as total FROM users WHERE department = ? AND (status = 'Working' OR status = 'Resign')");
+        $stmt_count->bind_param("s", $selected_department);
+        $stmt_count->execute();
+        $count_result = $stmt_count->get_result();
+        $total_employees = $count_result->fetch_assoc()['total'];
+        $stmt_count->close();
+        
+        // Get paginated results
+        $stmt = $conn->prepare("SELECT id, employee_id, name, department, location, status, date_of_exit FROM users WHERE department = ? AND (status = 'Working' OR status = 'Resign') ORDER BY name LIMIT ? OFFSET ?");
+        $stmt->bind_param("sii", $selected_department, $items_per_page, $offset);
     }
     $stmt->execute();
     $result = $stmt->get_result();
@@ -109,6 +195,8 @@ if ($selected_department === 'all' && !empty($selected_location)) {
     }
     $stmt->close();
 }
+
+$total_pages = ceil($total_employees / $items_per_page);
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -429,6 +517,47 @@ if ($selected_department === 'all' && !empty($selected_location)) {
                         </div>
                     <?php endforeach; ?>
                     </div>
+                    
+                    <!-- Pagination Controls -->
+                    <?php if ($total_pages > 1): ?>
+                    <nav aria-label="Page navigation" class="mt-4">
+                        <ul class="pagination justify-content-center">
+                            <?php if ($current_page > 1): ?>
+                                <li class="page-item">
+                                    <a class="page-link" href="?department=<?php echo urlencode($selected_department); ?>&location=<?php echo urlencode($selected_location); ?>&page=1">First</a>
+                                </li>
+                                <li class="page-item">
+                                    <a class="page-link" href="?department=<?php echo urlencode($selected_department); ?>&location=<?php echo urlencode($selected_location); ?>&page=<?php echo $current_page - 1; ?>">Previous</a>
+                                </li>
+                            <?php endif; ?>
+                            
+                            <?php 
+                            $start_page = max(1, $current_page - 2);
+                            $end_page = min($total_pages, $current_page + 2);
+                            for ($i = $start_page; $i <= $end_page; $i++): 
+                            ?>
+                                <li class="page-item <?php echo ($i === $current_page) ? 'active' : ''; ?>">
+                                    <a class="page-link" href="?department=<?php echo urlencode($selected_department); ?>&location=<?php echo urlencode($selected_location); ?>&page=<?php echo $i; ?>">
+                                        <?php echo $i; ?>
+                                    </a>
+                                </li>
+                            <?php endfor; ?>
+                            
+                            <?php if ($current_page < $total_pages): ?>
+                                <li class="page-item">
+                                    <a class="page-link" href="?department=<?php echo urlencode($selected_department); ?>&location=<?php echo urlencode($selected_location); ?>&page=<?php echo $current_page + 1; ?>">Next</a>
+                                </li>
+                                <li class="page-item">
+                                    <a class="page-link" href="?department=<?php echo urlencode($selected_department); ?>&location=<?php echo urlencode($selected_location); ?>&page=<?php echo $total_pages; ?>">Last</a>
+                                </li>
+                            <?php endif; ?>
+                        </ul>
+                    </nav>
+                    <div class="text-center text-muted mb-3">
+                        Page <?php echo $current_page; ?> of <?php echo $total_pages; ?> 
+                        (Showing <?php echo count($employees); ?> of <?php echo $total_employees; ?> employees)
+                    </div>
+                    <?php endif; ?>
                 <?php endif; ?>
             <?php else: ?>
                 <div class="no-employees">
