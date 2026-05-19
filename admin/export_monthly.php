@@ -197,6 +197,20 @@ if ($selected_department === 'all' && !empty($selected_location)) {
 }
 
 $total_pages = ceil($total_employees / $items_per_page);
+
+// Helper function to get initials and avatar color
+function getInitials($name) {
+    $parts = explode(' ', trim($name));
+    if (count($parts) >= 2) {
+        return strtoupper(substr($parts[0], 0, 1) . substr($parts[count($parts) - 1], 0, 1));
+    }
+    return strtoupper(substr($name, 0, 2));
+}
+
+function getAvatarColor($name, $id) {
+    $colors = ['avatar-1', 'avatar-2', 'avatar-3', 'avatar-4', 'avatar-5', 'avatar-6', 'avatar-7', 'avatar-8'];
+    return $colors[($id % 8)];
+}
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -210,29 +224,180 @@ $total_pages = ceil($total_employees / $items_per_page);
     <!-- Flatpickr Date Range Picker CSS -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/flatpickr/4.6.13/flatpickr.min.css">
     <style>
-        .employee-card {
-            border-left: 4px solid #28a745;
-            transition: all 0.3s ease;
+        /* Collapsible Department Section */
+        .dept-section {
+            background: #f8f9fa;
+            border-radius: 8px;
+            margin-bottom: 1.5rem;
+            overflow: hidden;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
         }
-        .employee-card:hover {
-            box-shadow: 0 4px 12px rgba(40, 167, 69, 0.2);
-            transform: translateY(-2px);
-        }
-        .export-btn {
-            padding: 0.4rem 0.8rem;
-            font-size: 0.85rem;
-        }
-        .department-header {
+
+        .dept-header {
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             color: white;
-            padding: 2rem 0;
-            margin-bottom: 2rem;
+            padding: 1rem 1.5rem;
+            cursor: pointer;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            user-select: none;
+            transition: all 0.3s ease;
         }
+
+        .dept-header:hover {
+            box-shadow: 0 4px 8px rgba(102, 126, 234, 0.3);
+        }
+
+        .dept-header-title {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            font-weight: 600;
+            font-size: 1.1rem;
+        }
+
+        .dept-count {
+            background: rgba(255, 255, 255, 0.3);
+            padding: 0.25rem 0.75rem;
+            border-radius: 20px;
+            font-size: 0.85rem;
+            font-weight: 500;
+        }
+
+        .dept-toggle {
+            transition: transform 0.3s ease;
+            font-size: 1.25rem;
+        }
+
+        .dept-toggle.collapsed {
+            transform: rotate(-90deg);
+        }
+
+        .dept-employees {
+            max-height: 2000px;
+            transition: max-height 0.3s ease;
+            overflow: hidden;
+        }
+
+        .dept-employees.collapsed {
+            max-height: 0;
+            padding: 0;
+        }
+
+        /* Employee Row */
+        .employee-row {
+            display: flex;
+            align-items: center;
+            padding: 1rem 1.5rem;
+            border-bottom: 1px solid #e0e0e0;
+            background: white;
+            transition: all 0.3s ease;
+        }
+
+        .employee-row:last-child {
+            border-bottom: none;
+        }
+
+        .employee-row:hover {
+            background: #f0f4ff;
+        }
+
+        /* Avatar */
+        .employee-avatar {
+            width: 50px;
+            height: 50px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-weight: bold;
+            font-size: 0.9rem;
+            margin-right: 1.5rem;
+            flex-shrink: 0;
+        }
+
+        /* Employee Info Grid */
+        .employee-info {
+            display: grid;
+            grid-template-columns: auto 1fr auto auto;
+            gap: 2rem;
+            align-items: center;
+            flex: 1;
+        }
+
+        .employee-id-section {
+            min-width: 100px;
+        }
+
+        .employee-id-label {
+            font-size: 0.75rem;
+            color: #666;
+            text-transform: uppercase;
+            font-weight: 600;
+            margin-bottom: 0.25rem;
+        }
+
+        .employee-id {
+            font-size: 0.95rem;
+            font-weight: 600;
+            color: #667eea;
+        }
+
+        .employee-name {
+            font-size: 0.95rem;
+            font-weight: 600;
+            color: #333;
+            margin-bottom: 0.25rem;
+        }
+
+        .employee-dept-badge {
+            display: inline-block;
+            background: #e8f0fe;
+            color: #667eea;
+            padding: 0.35rem 0.75rem;
+            border-radius: 12px;
+            font-size: 0.75rem;
+            font-weight: 600;
+        }
+
+        .export-btn-small {
+            padding: 0.5rem 1rem;
+            border: 1px solid #28a745;
+            color: #28a745;
+            background: white;
+            border-radius: 6px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            font-weight: 500;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            font-size: 0.85rem;
+        }
+
+        .export-btn-small:hover {
+            background: #28a745;
+            color: white;
+        }
+
         .no-employees {
             text-align: center;
-            padding: 3rem;
-            color: #666;
+            padding: 2rem;
+            color: #999;
         }
+
+        /* Avatar Colors - Generating based on initials */
+        .avatar-1 { background: #6366f1; }
+        .avatar-2 { background: #ec4899; }
+        .avatar-3 { background: #f59e0b; }
+        .avatar-4 { background: #10b981; }
+        .avatar-5 { background: #3b82f6; }
+        .avatar-6 { background: #8b5cf6; }
+        .avatar-7 { background: #06b6d4; }
+        .avatar-8 { background: #f87171; }
+
         .modal-header {
             background-color: #28a745;
             color: white;
@@ -361,7 +526,7 @@ $total_pages = ceil($total_employees / $items_per_page);
             </div>
         </div>
 
-        <div class="container">
+        <div class="container mt-5">
             <?php if (count($employees) > 0): ?>
                 <?php if ($selected_department === 'all'): ?>
                     <!-- Group by department when viewing all departments -->
@@ -377,200 +542,177 @@ $total_pages = ceil($total_employees / $items_per_page);
                     ?>
                     
                     <?php foreach ($grouped_employees as $dept_name => $dept_employees): ?>
-                        <div class="mt-5">
-                            <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 15px 20px; border-radius: 8px; margin-bottom: 20px;">
-                                <h4 class="mb-0"><i class="fas fa-building"></i> <?php echo htmlspecialchars($dept_name); ?> Department (<?php echo count($dept_employees); ?> employees)</h4>
+                    <div class="dept-section">
+                        <!-- Department Header - Collapsible -->
+                        <div class="dept-header" onclick="toggleDept(this)">
+                            <div class="dept-header-title">
+                                <i class="fas fa-users"></i>
+                                <span><?php echo htmlspecialchars($dept_name); ?> Department</span>
+                                <span class="dept-count"><?php echo count($dept_employees); ?> employees</span>
                             </div>
-                            <div class="row">
-                                <?php foreach ($dept_employees as $employee): ?>
-                                    <div class="col-md-6 col-lg-4 mb-4">
-                                        <div class="card employee-card shadow-sm">
-                                            <div class="card-body">
-                                                <div class="d-flex justify-content-between align-items-start">
-                                                    <div>
-                                                        <h5 class="card-title mb-1">
-                                                            <i class="fas fa-user-circle text-success"></i> <?php echo htmlspecialchars($employee['name']); ?>
-                                                        </h5>
-                                                        <p class="card-text text-muted mb-0">
-                                                            <small>ID: <?php echo htmlspecialchars($employee['employee_id']); ?></small>
-                                                        </p>
-                                                        <p class="card-text text-muted">
-                                                            <small><?php echo htmlspecialchars($employee['department']); ?></small>
-                                                        </p>
-                                                    </div>
-                                                </div>
-                                            </div>
-                                            <div class="card-footer bg-light">
-                                                <button type="button" class="btn btn-success export-btn w-100" data-bs-toggle="modal" 
-                                                        data-bs-target="#exportModal<?php echo $employee['id']; ?>">
-                                                    <i class="fas fa-download"></i> Export Excel
-                                                </button>
-                                            </div>
-                                        </div>
-
-                                        <!-- Export Modal for Each Employee -->
-                                        <div class="modal fade" id="exportModal<?php echo $employee['id']; ?>" tabindex="-1">
-                                            <div class="modal-dialog modal-dialog-centered">
-                                                <div class="modal-content">
-                                                    <div class="modal-header">
-                                                        <h5 class="modal-title">
-                                                            Export Report - <?php echo htmlspecialchars($employee['name']); ?>
-                                                        </h5>
-                                                        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
-                                                    </div>
-                                                    <form method="POST" action="export_employee_excel.php">
-                                                        <div class="modal-body">
-                                                            <input type="hidden" name="employee_id" value="<?php echo $employee['id']; ?>">
-                                                            <input type="hidden" name="employee_name" value="<?php echo htmlspecialchars($employee['name']); ?>">
-                                                            
-                                                            <div class="form-group mb-3">
-                                                                <label for="dateRangeEmployee<?php echo $employee['id']; ?>" class="form-label">
-                                                                    <i class="fas fa-calendar"></i> Select Date Range:
-                                                                </label>
-                                                                <input type="text" id="dateRangeEmployee<?php echo $employee['id']; ?>" name="dateRange" 
-                                                                       class="form-control date-range-picker" placeholder="From Date - To Date" required>
-                                                                <small class="text-muted">Click to open calendar and select start and end dates</small>
-                                                                <input type="hidden" name="from_date" id="fromDateEmployee<?php echo $employee['id']; ?>">
-                                                                <input type="hidden" name="to_date" id="toDateEmployee<?php echo $employee['id']; ?>">
-                                                            </div>
-                                                        </div>
-                                                        <div class="modal-footer">
-                                                            <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
-                                                            <button type="submit" class="btn export-modal-btn">
-                                                                <i class="fas fa-file-excel"></i> Download Excel
-                                                            </button>
-                                                        </div>
-                                                    </form>
-                                                </div>
-                                            </div>
-                                        </div>
-                                    </div>
-                                <?php endforeach; ?>
-                            </div>
+                            <i class="fas fa-chevron-down dept-toggle"></i>
                         </div>
-                    <?php endforeach; ?>
-                <?php else: ?>
-                    <!-- Show single department employees in grid -->
-                    <div class="row">
-                        <?php foreach ($employees as $employee): ?>
-                        <div class="col-md-6 col-lg-4 mb-4">
-                            <div class="card employee-card shadow-sm">
-                                <div class="card-body">
-                                    <div class="d-flex justify-content-between align-items-start">
+
+                        <!-- Department Employees -->
+                        <div class="dept-employees">
+                            <?php foreach ($dept_employees as $employee): ?>
+                                <div class="employee-row">
+                                    <!-- Avatar -->
+                                    <div class="employee-avatar <?php echo getAvatarColor($employee['name'], $employee['id']); ?>">
+                                        <?php echo getInitials($employee['name']); ?>
+                                    </div>
+
+                                    <!-- Employee Info -->
+                                    <div class="employee-info">
+                                        <div class="employee-id-section">
+                                            <div class="employee-id-label">Employee ID</div>
+                                            <div class="employee-id">ID: <?php echo htmlspecialchars($employee['employee_id']); ?></div>
+                                        </div>
                                         <div>
-                                            <h5 class="card-title mb-1">
-                                                <i class="fas fa-user-circle text-success"></i> <?php echo htmlspecialchars($employee['name']); ?>
-                                            </h5>
-                                            <p class="card-text text-muted mb-0">
-                                                <small>ID: <?php echo htmlspecialchars($employee['employee_id']); ?></small>
-                                            </p>
-                                            <p class="card-text text-muted">
-                                                <small><?php echo htmlspecialchars($employee['department']); ?></small>
-                                            </p>
+                                            <div class="employee-name"><?php echo htmlspecialchars($employee['name']); ?></div>
+                                        </div>
+                                        <div>
+                                            <span class="employee-dept-badge"><?php echo htmlspecialchars($dept_name); ?></span>
                                         </div>
                                     </div>
-                                </div>
-                                <div class="card-footer bg-light">
-                                    <button type="button" class="btn btn-success export-btn w-100" data-bs-toggle="modal" 
+
+                                    <!-- Export Button -->
+                                    <button type="button" class="export-btn-small" data-bs-toggle="modal" 
                                             data-bs-target="#exportModal<?php echo $employee['id']; ?>">
-                                        <i class="fas fa-download"></i> Export Excel
+                                        <i class="fas fa-download"></i> Export
                                     </button>
                                 </div>
-                            </div>
 
-                            <!-- Export Modal for Each Employee -->
-                            <div class="modal fade" id="exportModal<?php echo $employee['id']; ?>" tabindex="-1">
-                                <div class="modal-dialog modal-dialog-centered">
-                                    <div class="modal-content">
-                                        <div class="modal-header">
-                                            <h5 class="modal-title">
-                                                Export Report - <?php echo htmlspecialchars($employee['name']); ?>
-                                            </h5>
-                                            <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
-                                        </div>
-                                        <form method="POST" action="export_employee_excel.php">
-                                            <div class="modal-body">
-                                                <input type="hidden" name="employee_id" value="<?php echo $employee['id']; ?>">
-                                                <input type="hidden" name="employee_name" value="<?php echo htmlspecialchars($employee['name']); ?>">
-                                                
-                                                <div class="form-group mb-3">
-                                                    <label for="dateRangeEmployee<?php echo $employee['id']; ?>" class="form-label">
-                                                        <i class="fas fa-calendar"></i> Select Date Range:
-                                                    </label>
-                                                    <input type="text" id="dateRangeEmployee<?php echo $employee['id']; ?>" name="dateRange" 
-                                                           class="form-control date-range-picker" placeholder="From Date - To Date" required>
-                                                    <small class="text-muted">Click to open calendar and select start and end dates</small>
-                                                    <input type="hidden" name="from_date" id="fromDateEmployee<?php echo $employee['id']; ?>">
-                                                    <input type="hidden" name="to_date" id="toDateEmployee<?php echo $employee['id']; ?>">
+                                <!-- Export Modal for Each Employee -->
+                                <div class="modal fade" id="exportModal<?php echo $employee['id']; ?>" tabindex="-1">
+                                    <div class="modal-dialog modal-dialog-centered">
+                                        <div class="modal-content">
+                                            <div class="modal-header">
+                                                <h5 class="modal-title">
+                                                    Export Report - <?php echo htmlspecialchars($employee['name']); ?>
+                                                </h5>
+                                                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+                                            </div>
+                                            <form method="POST" action="export_employee_excel.php">
+                                                <div class="modal-body">
+                                                    <input type="hidden" name="employee_id" value="<?php echo $employee['id']; ?>">
+                                                    <input type="hidden" name="employee_name" value="<?php echo htmlspecialchars($employee['name']); ?>">
+                                                    
+                                                    <div class="form-group mb-3">
+                                                        <label for="dateRangeEmployee<?php echo $employee['id']; ?>" class="form-label">
+                                                            <i class="fas fa-calendar"></i> Select Date Range:
+                                                        </label>
+                                                        <input type="text" id="dateRangeEmployee<?php echo $employee['id']; ?>" name="dateRange" 
+                                                               class="form-control date-range-picker" placeholder="From Date - To Date" required>
+                                                        <small class="text-muted">Click to open calendar and select start and end dates</small>
+                                                        <input type="hidden" name="from_date" id="fromDateEmployee<?php echo $employee['id']; ?>">
+                                                        <input type="hidden" name="to_date" id="toDateEmployee<?php echo $employee['id']; ?>">
+                                                    </div>
                                                 </div>
-                                            </div>
-                                            <div class="modal-footer">
-                                                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
-                                                <button type="submit" class="btn export-modal-btn">
-                                                    <i class="fas fa-file-excel"></i> Download Excel
-                                                </button>
-                                            </div>
-                                        </form>
+                                                <div class="modal-footer">
+                                                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                                                    <button type="submit" class="btn export-modal-btn">
+                                                        <i class="fas fa-file-excel"></i> Download Excel
+                                                    </button>
+                                                </div>
+                                            </form>
+                                        </div>
                                     </div>
                                 </div>
+                            <?php endforeach; ?>
+                        </div>
+                    </div>
+                    <?php endforeach; ?>
+                <?php else: ?>
+                    <!-- Show single department employees in table layout -->
+                    <div class="dept-section">
+                        <div class="dept-header">
+                            <div class="dept-header-title">
+                                <i class="fas fa-users"></i>
+                                <span><?php echo htmlspecialchars($selected_department); ?> Department</span>
+                                <span class="dept-count"><?php echo count($employees); ?> employees</span>
                             </div>
                         </div>
-                    <?php endforeach; ?>
+
+                        <div class="dept-employees">
+                            <?php foreach ($employees as $employee): ?>
+                                <div class="employee-row">
+                                    <!-- Avatar -->
+                                    <div class="employee-avatar <?php echo getAvatarColor($employee['name'], $employee['id']); ?>">
+                                        <?php echo getInitials($employee['name']); ?>
+                                    </div>
+
+                                    <!-- Employee Info -->
+                                    <div class="employee-info">
+                                        <div class="employee-id-section">
+                                            <div class="employee-id-label">Employee ID</div>
+                                            <div class="employee-id">ID: <?php echo htmlspecialchars($employee['employee_id']); ?></div>
+                                        </div>
+                                        <div>
+                                            <div class="employee-name"><?php echo htmlspecialchars($employee['name']); ?></div>
+                                        </div>
+                                        <div>
+                                            <span class="employee-dept-badge"><?php echo htmlspecialchars($selected_department); ?></span>
+                                        </div>
+                                    </div>
+
+                                    <!-- Export Button -->
+                                    <button type="button" class="export-btn-small" data-bs-toggle="modal" 
+                                            data-bs-target="#exportModal<?php echo $employee['id']; ?>">
+                                        <i class="fas fa-download"></i> Export
+                                    </button>
+                                </div>
+
+                                <!-- Export Modal for Each Employee -->
+                                <div class="modal fade" id="exportModal<?php echo $employee['id']; ?>" tabindex="-1">
+                                    <div class="modal-dialog modal-dialog-centered">
+                                        <div class="modal-content">
+                                            <div class="modal-header">
+                                                <h5 class="modal-title">
+                                                    Export Report - <?php echo htmlspecialchars($employee['name']); ?>
+                                                </h5>
+                                                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+                                            </div>
+                                            <form method="POST" action="export_employee_excel.php">
+                                                <div class="modal-body">
+                                                    <input type="hidden" name="employee_id" value="<?php echo $employee['id']; ?>">
+                                                    <input type="hidden" name="employee_name" value="<?php echo htmlspecialchars($employee['name']); ?>">
+                                                    
+                                                    <div class="form-group mb-3">
+                                                        <label for="dateRangeEmployee<?php echo $employee['id']; ?>" class="form-label">
+                                                            <i class="fas fa-calendar"></i> Select Date Range:
+                                                        </label>
+                                                        <input type="text" id="dateRangeEmployee<?php echo $employee['id']; ?>" name="dateRange" 
+                                                               class="form-control date-range-picker" placeholder="From Date - To Date" required>
+                                                        <small class="text-muted">Click to open calendar and select start and end dates</small>
+                                                        <input type="hidden" name="from_date" id="fromDateEmployee<?php echo $employee['id']; ?>">
+                                                        <input type="hidden" name="to_date" id="toDateEmployee<?php echo $employee['id']; ?>">
+                                                    </div>
+                                                </div>
+                                                <div class="modal-footer">
+                                                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                                                    <button type="submit" class="btn export-modal-btn">
+                                                        <i class="fas fa-file-excel"></i> Download Excel
+                                                    </button>
+                                                </div>
+                                            </form>
+                                        </div>
+                                    </div>
+                                </div>
+                            <?php endforeach; ?>
+                        </div>
                     </div>
-                    
-                    <!-- Pagination Controls -->
-                    <?php if ($total_pages > 1): ?>
-                    <nav aria-label="Page navigation" class="mt-4">
-                        <ul class="pagination justify-content-center">
-                            <?php if ($current_page > 1): ?>
-                                <li class="page-item">
-                                    <a class="page-link" href="?department=<?php echo urlencode($selected_department); ?>&location=<?php echo urlencode($selected_location); ?>&page=1">First</a>
-                                </li>
-                                <li class="page-item">
-                                    <a class="page-link" href="?department=<?php echo urlencode($selected_department); ?>&location=<?php echo urlencode($selected_location); ?>&page=<?php echo $current_page - 1; ?>">Previous</a>
-                                </li>
-                            <?php endif; ?>
-                            
-                            <?php 
-                            $start_page = max(1, $current_page - 2);
-                            $end_page = min($total_pages, $current_page + 2);
-                            for ($i = $start_page; $i <= $end_page; $i++): 
-                            ?>
-                                <li class="page-item <?php echo ($i === $current_page) ? 'active' : ''; ?>">
-                                    <a class="page-link" href="?department=<?php echo urlencode($selected_department); ?>&location=<?php echo urlencode($selected_location); ?>&page=<?php echo $i; ?>">
-                                        <?php echo $i; ?>
-                                    </a>
-                                </li>
-                            <?php endfor; ?>
-                            
-                            <?php if ($current_page < $total_pages): ?>
-                                <li class="page-item">
-                                    <a class="page-link" href="?department=<?php echo urlencode($selected_department); ?>&location=<?php echo urlencode($selected_location); ?>&page=<?php echo $current_page + 1; ?>">Next</a>
-                                </li>
-                                <li class="page-item">
-                                    <a class="page-link" href="?department=<?php echo urlencode($selected_department); ?>&location=<?php echo urlencode($selected_location); ?>&page=<?php echo $total_pages; ?>">Last</a>
-                                </li>
-                            <?php endif; ?>
-                        </ul>
-                    </nav>
-                    <div class="text-center text-muted mb-3">
-                        Page <?php echo $current_page; ?> of <?php echo $total_pages; ?> 
-                        (Showing <?php echo count($employees); ?> of <?php echo $total_employees; ?> employees)
-                    </div>
-                    <?php endif; ?>
                 <?php endif; ?>
             <?php else: ?>
                 <div class="no-employees">
                     <i class="fas fa-inbox" style="font-size: 3rem; color: #ccc;"></i>
-                    <p class="mt-3">No employees found in this department</p>
+                    <p class="mt-3">No employees found in this selection</p>
                 </div>
             <?php endif; ?>
         </div>
     <?php endif; ?>
 
-</div>
-
-<!-- Export All Departments Modal -->
+    <!-- Export All Departments Modal -->
 <div class="modal fade" id="exportAllModal" tabindex="-1">
     <div class="modal-dialog modal-dialog-centered">
         <div class="modal-content">
@@ -886,6 +1028,17 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     });
 });
+</script>
+
+<!-- Collapsible Departments Script -->
+<script>
+function toggleDept(headerElement) {
+    const employeesDiv = headerElement.nextElementSibling;
+    const toggleIcon = headerElement.querySelector('.dept-toggle');
+    
+    employeesDiv.classList.toggle('collapsed');
+    toggleIcon.classList.toggle('collapsed');
+}
 </script>
 
 </body>
