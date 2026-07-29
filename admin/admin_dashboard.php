@@ -283,6 +283,19 @@ $stmt->close();
             </div>
         </div>
 
+        <!-- GPS Restriction Card -->
+        <div class="col-md-6 col-lg-4">
+            <div class="card dashboard-card shadow" style="border-left-color: #20c997;">
+                <div class="card-body">
+                    <h5 class="card-title">📡 GPS Attendance Restriction</h5>
+                    <p class="card-text text-muted">Control which employees must be within 100 m of the office to mark attendance.</p>
+                    <div class="card-links">
+                        <a href="geo_restriction.php?from=admin" class="btn btn-sm" style="background-color: #20c997; border-color: #20c997; color:white;">Manage GPS Rules</a>
+                    </div>
+                </div>
+            </div>
+        </div>
+
     </div>
 </div>
 

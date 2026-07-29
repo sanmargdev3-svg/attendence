@@ -25,6 +25,10 @@ $filter_year = isset($_GET['year']) ? (int)$_GET['year'] : 2026;
 $filter_day = isset($_GET['day']) ? (int)$_GET['day'] : 0;
 $filter_name = isset($_GET['name']) ? htmlspecialchars($_GET['name']) : '';
 
+// Pagination
+$per_page = 20;
+$page = isset($_GET['page']) ? max(1, (int)$_GET['page']) : 1;
+
 // Fetch all departments
 $dept_stmt = $conn->prepare("SELECT DISTINCT u.department FROM users u WHERE u.status = 'Working' AND u.department IS NOT NULL AND u.department != '' ORDER BY u.department");
 $dept_stmt->execute();
@@ -35,45 +39,73 @@ while ($dept_row = $dept_result->fetch_assoc()) {
 }
 $dept_stmt->close();
 
-// Build SQL query with filters - SELECT only needed columns
-$sql = "SELECT a.id, a.date, a.punch_in, a.punch_out, a.punch_in_location, a.punch_out_location, a.status, a.selfie_punchin, a.selfie_punchout, u.name, u.department FROM attendance a JOIN users u ON a.user_id = u.id WHERE u.status = 'Working' AND 1=1";
+// Build shared WHERE clause (used for count, stats and the paginated list)
+$where_sql = " WHERE u.status = 'Working' AND 1=1";
 $params = [];
 $types = "";
 
 // Apply department filter
 if (!empty($filter_dept)) {
-    $sql .= " AND u.department = ?";
+    $where_sql .= " AND u.department = ?";
     $params[] = $filter_dept;
     $types .= "s";
 }
 
 // Apply name filter
 if (!empty($filter_name)) {
-    $sql .= " AND u.name LIKE ?";
+    $where_sql .= " AND u.name LIKE ?";
     $params[] = "%" . $filter_name . "%";
     $types .= "s";
 }
 
 // Apply month and year filter
-$sql .= " AND MONTH(a.date) = ? AND YEAR(a.date) = ?";
+$where_sql .= " AND MONTH(a.date) = ? AND YEAR(a.date) = ?";
 $params[] = $filter_month;
 $params[] = $filter_year;
 $types .= "ii";
 
 // Apply day filter if selected
 if (!empty($filter_day)) {
-    $sql .= " AND DAY(a.date) = ?";
+    $where_sql .= " AND DAY(a.date) = ?";
     $params[] = $filter_day;
     $types .= "i";
 }
 
-$sql .= " ORDER BY a.date DESC, a.punch_in DESC";
+// --- Count + aggregate stats (unpaginated, avoids loading all rows into PHP) ---
+$stats_sql = "SELECT 
+        COUNT(*) as total_records,
+        SUM(CASE WHEN a.selfie_punchin IS NOT NULL AND a.selfie_punchin != '' THEN 1 ELSE 0 END) as with_punch_in_selfie,
+        SUM(CASE WHEN a.selfie_punchout IS NOT NULL AND a.selfie_punchout != '' THEN 1 ELSE 0 END) as with_punch_out_selfie,
+        SUM(CASE WHEN (a.selfie_punchin IS NULL OR a.selfie_punchin = '') OR (a.selfie_punchout IS NULL OR a.selfie_punchout = '') THEN 1 ELSE 0 END) as missing_selfies
+    FROM attendance a JOIN users u ON a.user_id = u.id" . $where_sql;
+$stats_stmt = $conn->prepare($stats_sql);
+if (!empty($params)) {
+    $stats_stmt->bind_param($types, ...$params);
+}
+$stats_stmt->execute();
+$stats = $stats_stmt->get_result()->fetch_assoc();
+$stats_stmt->close();
+
+$total_records = (int)($stats['total_records'] ?? 0);
+$with_punch_in_selfie = (int)($stats['with_punch_in_selfie'] ?? 0);
+$with_punch_out_selfie = (int)($stats['with_punch_out_selfie'] ?? 0);
+$missing_selfies = (int)($stats['missing_selfies'] ?? 0);
+$punch_in_percentage = $total_records > 0 ? round(100 * $with_punch_in_selfie / $total_records, 2) : 0;
+$punch_out_percentage = $total_records > 0 ? round(100 * $with_punch_out_selfie / $total_records, 2) : 0;
+
+$total_pages = max(1, (int)ceil($total_records / $per_page));
+$page = min($page, $total_pages);
+$offset = ($page - 1) * $per_page;
+
+// --- Paginated list query ---
+$sql = "SELECT a.id, a.date, a.punch_in, a.punch_out, a.punch_in_location, a.punch_out_location, a.status, a.selfie_punchin, a.selfie_punchout, u.name, u.department
+        FROM attendance a JOIN users u ON a.user_id = u.id" . $where_sql . " ORDER BY a.date DESC, a.punch_in DESC LIMIT ? OFFSET ?";
+$list_params = array_merge($params, [$per_page, $offset]);
+$list_types = $types . "ii";
 
 // Execute query
 $stmt = $conn->prepare($sql);
-if (!empty($params)) {
-    $stmt->bind_param($types, ...$params);
-}
+$stmt->bind_param($list_types, ...$list_params);
 $stmt->execute();
 $result = $stmt->get_result();
 ?>
@@ -88,13 +120,18 @@ $result = $stmt->get_result();
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
     <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11/dist/sweetalert2.all.min.js"></script>
     <style>
+        .selfie-cell {
+            width: 70px;
+        }
         .selfie-thumbnail {
-            max-width: 70px;
-            max-height: 70px;
+            width: 70px;
+            height: 70px;
+            object-fit: cover;
             border-radius: 6px;
             cursor: pointer;
             transition: transform 0.2s;
             border: 2px solid #ddd;
+            display: block;
         }
         .selfie-thumbnail:hover {
             transform: scale(1.08);
@@ -107,9 +144,17 @@ $result = $stmt->get_result();
             margin-top: 20px;
         }
         .no-selfie {
+            width: 70px;
+            height: 70px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
             color: #999;
             font-size: 11px;
             text-align: center;
+            background: #f8f9fa;
+            border-radius: 6px;
+            border: 1px dashed #ccc;
         }
         .badge-selfie {
             font-size: 10px;
@@ -238,20 +283,26 @@ $result = $stmt->get_result();
                                     
                                     <!-- Punch In Selfie -->
                                     <td>
-                                        <?php if (!empty($row['selfie_punchin'])): ?>
-                                            <img 
-                                                src="../uploads/selfies/<?php echo str_replace('-', '/', htmlspecialchars($row['date'])); ?>/<?php echo htmlspecialchars($row['selfie_punchin']); ?>" 
-                                                alt="Punch In Selfie" 
-                                                class="selfie-thumbnail"
-                                                onclick="viewSelfie('<?php echo htmlspecialchars($row['selfie_punchin']); ?>', 'Punch In', '<?php echo htmlspecialchars($row['name']); ?>', '<?php echo htmlspecialchars($row['date']); ?>')"
-                                                onerror="this.src='../uploads/selfies/<?php echo htmlspecialchars($row['selfie_punchin']); ?>'"
-                                                title="Click to view punch-in selfie"
-                                            >
-                                            <br>
-                                            <span class="badge badge-selfie bg-success">✓</span>
+                                        <?php if (!empty($row['selfie_punchin'])): 
+                                            $pin_primary  = '../uploads/selfies/' . str_replace('-', '/', htmlspecialchars($row['date'])) . '/' . htmlspecialchars($row['selfie_punchin']);
+                                            $pin_fallback = '../uploads/selfies/' . htmlspecialchars($row['selfie_punchin']);
+                                        ?>
+                                            <div class="selfie-cell">
+                                                <img 
+                                                    src="<?php echo $pin_primary; ?>" 
+                                                    data-fallback="<?php echo $pin_fallback; ?>"
+                                                    alt="Punch In Selfie" 
+                                                    class="selfie-thumbnail"
+                                                    onclick="viewSelfie('<?php echo htmlspecialchars($row['selfie_punchin']); ?>', 'Punch In', '<?php echo htmlspecialchars($row['name']); ?>', '<?php echo htmlspecialchars($row['date']); ?>')"
+                                                    onerror="handleSelfieError(this)"
+                                                    title="Click to view punch-in selfie"
+                                                >
+                                                <br>
+                                                <span class="badge badge-selfie bg-success">✓</span>
+                                            </div>
                                         <?php else: ?>
                                             <div class="no-selfie">
-                                                <span class="badge badge-selfie bg-danger">✗</span>
+                                                <span class="badge badge-selfie bg-secondary">NO PHOTO</span>
                                             </div>
                                         <?php endif; ?>
                                     </td>
@@ -263,20 +314,26 @@ $result = $stmt->get_result();
                                     
                                     <!-- Punch Out Selfie -->
                                     <td>
-                                        <?php if (!empty($row['selfie_punchout'])): ?>
-                                            <img 
-                                                src="../uploads/selfies/<?php echo str_replace('-', '/', htmlspecialchars($row['date'])); ?>/<?php echo htmlspecialchars($row['selfie_punchout']); ?>" 
-                                                alt="Punch Out Selfie" 
-                                                class="selfie-thumbnail"
-                                                onclick="viewSelfie('<?php echo htmlspecialchars($row['selfie_punchout']); ?>', 'Punch Out', '<?php echo htmlspecialchars($row['name']); ?>', '<?php echo htmlspecialchars($row['date']); ?>')"
-                                                onerror="this.src='../uploads/selfies/<?php echo htmlspecialchars($row['selfie_punchout']); ?>'"
-                                                title="Click to view punch-out selfie"
-                                            >
-                                            <br>
-                                            <span class="badge badge-selfie bg-success">✓</span>
+                                        <?php if (!empty($row['selfie_punchout'])): 
+                                            $pout_primary  = '../uploads/selfies/' . str_replace('-', '/', htmlspecialchars($row['date'])) . '/' . htmlspecialchars($row['selfie_punchout']);
+                                            $pout_fallback = '../uploads/selfies/' . htmlspecialchars($row['selfie_punchout']);
+                                        ?>
+                                            <div class="selfie-cell">
+                                                <img 
+                                                    src="<?php echo $pout_primary; ?>" 
+                                                    data-fallback="<?php echo $pout_fallback; ?>"
+                                                    alt="Punch Out Selfie" 
+                                                    class="selfie-thumbnail"
+                                                    onclick="viewSelfie('<?php echo htmlspecialchars($row['selfie_punchout']); ?>', 'Punch Out', '<?php echo htmlspecialchars($row['name']); ?>', '<?php echo htmlspecialchars($row['date']); ?>')"
+                                                    onerror="handleSelfieError(this)"
+                                                    title="Click to view punch-out selfie"
+                                                >
+                                                <br>
+                                                <span class="badge badge-selfie bg-success">✓</span>
+                                            </div>
                                         <?php else: ?>
                                             <div class="no-selfie">
-                                                <span class="badge badge-selfie bg-danger">✗</span>
+                                                <span class="badge badge-selfie bg-secondary">NO PHOTO</span>
                                             </div>
                                         <?php endif; ?>
                                     </td>
@@ -302,6 +359,37 @@ $result = $stmt->get_result();
                         </tbody>
                     </table>
                 </div>
+
+                <!-- Pagination -->
+                <?php if ($total_pages > 1): ?>
+                <div class="d-flex align-items-center justify-content-between flex-wrap gap-2 mt-3">
+                    <small class="text-muted">
+                        Showing <?php echo $offset + 1; ?>–<?php echo min($offset + $per_page, $total_records); ?> of <?php echo $total_records; ?> records
+                    </small>
+                    <ul class="pagination pagination-sm mb-0">
+                        <li class="page-item <?php echo $page <= 1 ? 'disabled' : ''; ?>">
+                            <a class="page-link" href="?<?php echo http_build_query(array_merge($_GET, ['page' => $page - 1])); ?>">&laquo;</a>
+                        </li>
+                        <?php
+                        $start_p = max(1, $page - 3);
+                        $end_p   = min($total_pages, $page + 3);
+                        if ($start_p > 1): ?>
+                        <li class="page-item disabled"><span class="page-link">…</span></li>
+                        <?php endif;
+                        for ($p = $start_p; $p <= $end_p; $p++): ?>
+                        <li class="page-item <?php echo $p === $page ? 'active' : ''; ?>">
+                            <a class="page-link" href="?<?php echo http_build_query(array_merge($_GET, ['page' => $p])); ?>"><?php echo $p; ?></a>
+                        </li>
+                        <?php endfor;
+                        if ($end_p < $total_pages): ?>
+                        <li class="page-item disabled"><span class="page-link">…</span></li>
+                        <?php endif; ?>
+                        <li class="page-item <?php echo $page >= $total_pages ? 'disabled' : ''; ?>">
+                            <a class="page-link" href="?<?php echo http_build_query(array_merge($_GET, ['page' => $page + 1])); ?>">&raquo;</a>
+                        </li>
+                    </ul>
+                </div>
+                <?php endif; ?>
             <?php else: ?>
                 <div class="alert alert-info" role="alert">
                     ℹ️ No attendance records found for the selected filters.
@@ -311,39 +399,8 @@ $result = $stmt->get_result();
     </div>
 
     <!-- Summary Statistics -->
-    <?php if ($result->num_rows > 0): ?>
+    <?php if ($total_records > 0): ?>
         <div class="row mt-4">
-            <?php
-            // Rewind result for statistics
-            $stmt->execute();
-            if (!empty($params)) {
-                $stmt->bind_param($types, ...$params);
-                $stmt->execute();
-            }
-            $result = $stmt->get_result();
-            
-            $total_records = 0;
-            $with_punch_in_selfie = 0;
-            $with_punch_out_selfie = 0;
-            $missing_selfies = 0;
-            
-            while ($row = $result->fetch_assoc()) {
-                $total_records++;
-                if (!empty($row['selfie_punchin'])) {
-                    $with_punch_in_selfie++;
-                }
-                if (!empty($row['selfie_punchout'])) {
-                    $with_punch_out_selfie++;
-                }
-                if (empty($row['selfie_punchin']) || empty($row['selfie_punchout'])) {
-                    $missing_selfies++;
-                }
-            }
-            
-            $punch_in_percentage = $total_records > 0 ? round(100 * $with_punch_in_selfie / $total_records, 2) : 0;
-            $punch_out_percentage = $total_records > 0 ? round(100 * $with_punch_out_selfie / $total_records, 2) : 0;
-            ?>
-            
             <div class="col-md-3">
                 <div class="card bg-primary text-white">
                     <div class="card-body text-center">
@@ -405,6 +462,21 @@ $result = $stmt->get_result();
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
 
 <script>
+    // Handle broken selfie images: try the fallback (old flat folder) path once,
+    // then replace with a fixed-size "NO PHOTO" placeholder so layout never breaks.
+    function handleSelfieError(imgEl) {
+        if (!imgEl.dataset.triedFallback) {
+            imgEl.dataset.triedFallback = "1";
+            const fallback = imgEl.getAttribute('data-fallback');
+            if (fallback) {
+                imgEl.src = fallback;
+                return;
+            }
+        }
+        const cell = imgEl.closest('.selfie-cell') || imgEl.parentElement;
+        cell.innerHTML = '<div class="no-selfie"><span class="badge badge-selfie bg-secondary">NO PHOTO</span></div>';
+    }
+
     function viewSelfie(filename, type, empName, date) {
         // Set modal content
         document.getElementById('selfieInfo').innerText = `${empName} - ${type} - ${date}`;

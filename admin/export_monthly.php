@@ -42,7 +42,12 @@ $selected_companies = isset($_POST['companies']) ? (is_array($_POST['companies']
 $employees = array();
 
 // Pagination setup
-$items_per_page = 50; // Show 50 employees per page
+$items_per_page = isset($_GET['items_per_page']) ? intval($_GET['items_per_page']) : 50;
+// Validate items_per_page - only allow 50, 100, 150, 200
+$allowed_per_page = [50, 100, 150, 200];
+if (!in_array($items_per_page, $allowed_per_page)) {
+    $items_per_page = 50;
+}
 $current_page = isset($_GET['page']) ? max(1, intval($_GET['page'])) : 1;
 $offset = ($current_page - 1) * $items_per_page;
 $total_employees = 0;
@@ -497,17 +502,30 @@ function getAvatarColor($name, $id) {
         <div class="department-header">
             <div class="container">
                 <div class="d-flex justify-content-between align-items-center">
-                    <div>
-                        <?php if ($selected_department === 'all' && empty($selected_location)): ?>
-                            <h2><i class="fas fa-building"></i> All Departments</h2>
-                        <?php elseif ($selected_department === 'all' && !empty($selected_location)): ?>
-                            <h2><i class="fas fa-map-marker-alt"></i> <?php echo htmlspecialchars($selected_location); ?> Location</h2>
-                        <?php elseif (!empty($selected_location)): ?>
-                            <h2><i class="fas fa-building"></i> <?php echo htmlspecialchars($selected_department); ?> - <i class="fas fa-map-marker-alt"></i> <?php echo htmlspecialchars($selected_location); ?></h2>
-                        <?php else: ?>
-                            <h2><i class="fas fa-building"></i> <?php echo htmlspecialchars($selected_department); ?> Department</h2>
-                        <?php endif; ?>
-                        <p class="mb-0">Total Employees: <strong><?php echo count($employees); ?></strong></p>
+                    <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 1rem;">
+                        <div style="flex: 1;">
+                            <?php if ($selected_department === 'all' && empty($selected_location)): ?>
+                                <h2><i class="fas fa-building"></i> All Departments</h2>
+                            <?php elseif ($selected_department === 'all' && !empty($selected_location)): ?>
+                                <h2><i class="fas fa-map-marker-alt"></i> <?php echo htmlspecialchars($selected_location); ?> Location</h2>
+                            <?php elseif (!empty($selected_location)): ?>
+                                <h2><i class="fas fa-building"></i> <?php echo htmlspecialchars($selected_department); ?> - <i class="fas fa-map-marker-alt"></i> <?php echo htmlspecialchars($selected_location); ?></h2>
+                            <?php else: ?>
+                                <h2><i class="fas fa-building"></i> <?php echo htmlspecialchars($selected_department); ?> Department</h2>
+                            <?php endif; ?>
+                            <p class="mb-0">Total Employees: <strong><?php echo $total_employees; ?></strong> | Showing: <strong><?php echo count($employees); ?></strong></p>
+                        </div>
+                        <div style="display: flex; flex-direction: column; align-items: flex-end; gap: 0.5rem; margin-left: 2rem; padding-top: 0.5rem;">
+                            <div style="display: flex; align-items: center; gap: 0.75rem; white-space: nowrap;">
+                                <label for="itemsPerPage" style="font-weight: 600; margin-bottom: 0; font-size: 0.9rem;">Show per page:</label>
+                                <select id="itemsPerPage" class="form-control form-control-sm" style="width: 85px; padding: 0.35rem 0.5rem;" onchange="changeItemsPerPage(this.value)">
+                                    <option value="50" <?php echo ($items_per_page == 50) ? 'selected' : ''; ?>>50</option>
+                                    <option value="100" <?php echo ($items_per_page == 100) ? 'selected' : ''; ?>>100</option>
+                                    <option value="150" <?php echo ($items_per_page == 150) ? 'selected' : ''; ?>>150</option>
+                                    <option value="200" <?php echo ($items_per_page == 200) ? 'selected' : ''; ?>>200</option>
+                                </select>
+                            </div>
+                        </div>
                     </div>
                     <?php if ($selected_department === 'all' && empty($selected_location) && count($employees) > 0): ?>
                         <form method="POST" action="export_all_departments.php" style="display: inline;">
@@ -623,6 +641,47 @@ function getAvatarColor($name, $id) {
                         </div>
                     </div>
                     <?php endforeach; ?>
+                    
+                    <!-- Pagination Controls for All Departments -->
+                    <?php if ($total_pages > 1): ?>
+                    <nav aria-label="Page navigation" class="mt-5">
+                        <ul class="pagination justify-content-center">
+                            <?php if ($current_page > 1): ?>
+                                <li class="page-item">
+                                    <a class="page-link" href="?department=all&location=<?php echo urlencode($selected_location); ?>&items_per_page=<?php echo $items_per_page; ?>&page=1">First</a>
+                                </li>
+                                <li class="page-item">
+                                    <a class="page-link" href="?department=all&location=<?php echo urlencode($selected_location); ?>&items_per_page=<?php echo $items_per_page; ?>&page=<?php echo $current_page - 1; ?>">Previous</a>
+                                </li>
+                            <?php endif; ?>
+                            
+                            <?php 
+                            $start_page = max(1, $current_page - 2);
+                            $end_page = min($total_pages, $current_page + 2);
+                            for ($i = $start_page; $i <= $end_page; $i++): 
+                            ?>
+                                <li class="page-item <?php echo ($i === $current_page) ? 'active' : ''; ?>">
+                                    <a class="page-link" href="?department=all&location=<?php echo urlencode($selected_location); ?>&items_per_page=<?php echo $items_per_page; ?>&page=<?php echo $i; ?>">
+                                        <?php echo $i; ?>
+                                    </a>
+                                </li>
+                            <?php endfor; ?>
+                            
+                            <?php if ($current_page < $total_pages): ?>
+                                <li class="page-item">
+                                    <a class="page-link" href="?department=all&location=<?php echo urlencode($selected_location); ?>&items_per_page=<?php echo $items_per_page; ?>&page=<?php echo $current_page + 1; ?>">Next</a>
+                                </li>
+                                <li class="page-item">
+                                    <a class="page-link" href="?department=all&location=<?php echo urlencode($selected_location); ?>&items_per_page=<?php echo $items_per_page; ?>&page=<?php echo $total_pages; ?>">Last</a>
+                                </li>
+                            <?php endif; ?>
+                        </ul>
+                    </nav>
+                    <div class="text-center text-muted mb-5">
+                        Page <?php echo $current_page; ?> of <?php echo $total_pages; ?> 
+                        (Showing <?php echo count($employees); ?> of <?php echo $total_employees; ?> employees)
+                    </div>
+                    <?php endif; ?>
                 <?php else: ?>
                     <!-- Show single department employees in table layout -->
                     <div class="dept-section">
@@ -702,6 +761,47 @@ function getAvatarColor($name, $id) {
                             <?php endforeach; ?>
                         </div>
                     </div>
+
+                    <!-- Pagination Controls for Single Department -->
+                    <?php if ($total_pages > 1): ?>
+                    <nav aria-label="Page navigation" class="mt-5">
+                        <ul class="pagination justify-content-center">
+                            <?php if ($current_page > 1): ?>
+                                <li class="page-item">
+                                    <a class="page-link" href="?department=<?php echo urlencode($selected_department); ?>&location=<?php echo urlencode($selected_location); ?>&items_per_page=<?php echo $items_per_page; ?>&page=1">First</a>
+                                </li>
+                                <li class="page-item">
+                                    <a class="page-link" href="?department=<?php echo urlencode($selected_department); ?>&location=<?php echo urlencode($selected_location); ?>&items_per_page=<?php echo $items_per_page; ?>&page=<?php echo $current_page - 1; ?>">Previous</a>
+                                </li>
+                            <?php endif; ?>
+                            
+                            <?php 
+                            $start_page = max(1, $current_page - 2);
+                            $end_page = min($total_pages, $current_page + 2);
+                            for ($i = $start_page; $i <= $end_page; $i++): 
+                            ?>
+                                <li class="page-item <?php echo ($i === $current_page) ? 'active' : ''; ?>">
+                                    <a class="page-link" href="?department=<?php echo urlencode($selected_department); ?>&location=<?php echo urlencode($selected_location); ?>&items_per_page=<?php echo $items_per_page; ?>&page=<?php echo $i; ?>">
+                                        <?php echo $i; ?>
+                                    </a>
+                                </li>
+                            <?php endfor; ?>
+                            
+                            <?php if ($current_page < $total_pages): ?>
+                                <li class="page-item">
+                                    <a class="page-link" href="?department=<?php echo urlencode($selected_department); ?>&location=<?php echo urlencode($selected_location); ?>&items_per_page=<?php echo $items_per_page; ?>&page=<?php echo $current_page + 1; ?>">Next</a>
+                                </li>
+                                <li class="page-item">
+                                    <a class="page-link" href="?department=<?php echo urlencode($selected_department); ?>&location=<?php echo urlencode($selected_location); ?>&items_per_page=<?php echo $items_per_page; ?>&page=<?php echo $total_pages; ?>">Last</a>
+                                </li>
+                            <?php endif; ?>
+                        </ul>
+                    </nav>
+                    <div class="text-center text-muted mb-5">
+                        Page <?php echo $current_page; ?> of <?php echo $total_pages; ?> 
+                        (Showing <?php echo count($employees); ?> of <?php echo $total_employees; ?> employees)
+                    </div>
+                    <?php endif; ?>
                 <?php endif; ?>
             <?php else: ?>
                 <div class="no-employees">
@@ -1038,6 +1138,21 @@ function toggleDept(headerElement) {
     
     employeesDiv.classList.toggle('collapsed');
     toggleIcon.classList.toggle('collapsed');
+}
+
+// Change items per page and reload
+function changeItemsPerPage(value) {
+    // Get current URL parameters
+    const urlParams = new URLSearchParams(window.location.search);
+    
+    // Update items_per_page
+    urlParams.set('items_per_page', value);
+    
+    // Reset to page 1 when changing items per page
+    urlParams.set('page', '1');
+    
+    // Redirect to new URL
+    window.location.href = '?' + urlParams.toString();
 }
 </script>
 

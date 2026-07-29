@@ -270,9 +270,11 @@ function calculateHours($punch_in, $punch_out) {
         }
         
         if ($punch_in_time && $punch_out_time) {
-            $interval = $punch_in_time->diff($punch_out_time);
-            $hours = $interval->h + ($interval->i / 60);
-            return number_format($hours, 2);
+            $diff = $punch_out_time->getTimestamp() - $punch_in_time->getTimestamp();
+            if ($diff < 0) $diff += 86400; // overnight shift
+            $hours = floor($diff / 3600);
+            $minutes = floor(($diff % 3600) / 60);
+            return sprintf("%02d:%02d", $hours, $minutes);
         }
     } catch (Exception $e) {
         return '-';

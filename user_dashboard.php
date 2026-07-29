@@ -75,6 +75,7 @@ LIMIT 30");
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <script defer src="https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11/dist/sweetalert2.all.min.js"></script>
     <style>
         :root {
             --primary: #667eea;
@@ -427,9 +428,16 @@ LIMIT 30");
                             <button class="btn-control btn-stop" id="stopCameraBtn" onclick="stopCamera()" disabled>
                                 <i class="fas fa-stop"></i> Stop Camera
                             </button>
+                            <?php if ($today_attendance && $today_attendance['first_punch_in'] && !$today_attendance['last_punch_out']): ?>
+                            <button class="btn-control" id="punchOutBtn" onclick="manualPunchOut()"
+                                style="background:#f56565;color:white;font-size:1.1rem;font-weight:600;">
+                                <i class="fas fa-sign-out-alt"></i> Punch Out
+                            </button>
+                            <?php else: ?>
                             <button class="btn-control btn-punch" id="manualPunchBtn" onclick="manualPunchIn()" disabled>
                                 <i class="fas fa-hand-paper"></i> Manual Punch
                             </button>
+                            <?php endif; ?>
                         </div>
                     </div>
                     
@@ -550,6 +558,7 @@ LIMIT 30");
         let detectionActive = false;
         let faceDetected = false;
         let faceDetectionTimeout = null;
+        let isPunching = false; // global guard — prevents any double-tap submission
         
         // Update current time
         function updateTime() {
@@ -637,42 +646,123 @@ LIMIT 30");
         
         // Manual Punch In
         function manualPunchIn() {
+            if (isPunching) return;  // block any second tap
+            isPunching = true;
+
             const btn = document.getElementById('manualPunchBtn');
             btn.disabled = true;
-            btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Processing...';
-            
-            // Create FormData for file upload
-            const canvas = document.getElementById('canvas');
-            canvas.toBlob(blob => {
-                const formData = new FormData();
-                formData.append('action', 'punch_in');
-                formData.append('photo', blob, 'selfie.jpg');
-                
-                fetch('user_attendance.php', {
-                    method: 'POST',
-                    body: formData
-                })
-                .then(response => response.json())
-                .then(data => {
-                    if (data.success) {
-                        addLog('✅ Punched In Successfully!', true);
-                        document.getElementById('currentStatus').innerHTML = '🟢 Active (Punched In)';
-                        stopCamera();
-                        
-                        // Refresh page after 2 seconds
-                        setTimeout(() => location.reload(), 2000);
-                    } else {
-                        addLog('❌ ' + data.message);
-                        btn.disabled = false;
-                        btn.innerHTML = '<i class="fas fa-hand-paper"></i> Manual Punch';
-                    }
-                })
-                .catch(err => {
-                    addLog('Error: ' + err.message);
+            btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Getting location...';
+
+            if (!navigator.geolocation) {
+                Swal.fire('GPS Not Supported', 'Your device does not support geolocation. Cannot mark attendance.', 'error');
+                btn.disabled = false;
+                btn.innerHTML = '<i class="fas fa-hand-paper"></i> Manual Punch';
+                return;
+            }
+
+            navigator.geolocation.getCurrentPosition(
+                pos => {
+                    btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Processing...';
+                    const canvas = document.getElementById('canvas');
+                    canvas.toBlob(blob => {
+                        const formData = new FormData();
+                        formData.append('action', 'punch_in');
+                        formData.append('latitude',  pos.coords.latitude);
+                        formData.append('longitude', pos.coords.longitude);
+                        formData.append('photo', blob, 'selfie.jpg');
+
+                        fetch('user_attendance.php', { method: 'POST', body: formData })
+                        .then(r => r.json())
+                        .then(data => {
+                            if (data.success) {
+                                addLog('✅ Punched In Successfully!', true);
+                                document.getElementById('currentStatus').innerHTML = '🟢 Active (Punched In)';
+                                stopCamera();
+                                setTimeout(() => location.reload(), 2000);
+                            } else {
+                                addLog('❌ ' + data.message);
+                                Swal.fire('Cannot Punch In', data.message, 'warning');
+                                isPunching = false;
+                                btn.disabled = false;
+                                btn.innerHTML = '<i class="fas fa-hand-paper"></i> Manual Punch';
+                            }
+                        })
+                        .catch(err => {
+                            addLog('Error: ' + err.message);
+                            isPunching = false;
+                            btn.disabled = false;
+                            btn.innerHTML = '<i class="fas fa-hand-paper"></i> Manual Punch';
+                        });
+                    }, 'image/jpeg', 0.95);
+                },
+                err => {
+                    Swal.fire('Location Required', 'GPS access was denied. You must allow location to mark attendance.', 'error');
+                    isPunching = false;
                     btn.disabled = false;
                     btn.innerHTML = '<i class="fas fa-hand-paper"></i> Manual Punch';
-                });
-            }, 'image/jpeg', 0.95);
+                },
+                { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
+            );
+        }
+
+        // Manual Punch Out
+        function manualPunchOut() {
+            if (isPunching) return;  // block double-tap
+            isPunching = true;
+
+            const btn = document.getElementById('punchOutBtn');
+            btn.disabled = true;
+            btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Getting location...';
+
+            if (!navigator.geolocation) {
+                Swal.fire('GPS Not Supported', 'Your device does not support geolocation. Cannot mark attendance.', 'error');
+                btn.disabled = false;
+                btn.innerHTML = '<i class="fas fa-sign-out-alt"></i> Punch Out';
+                return;
+            }
+
+            navigator.geolocation.getCurrentPosition(
+                pos => {
+                    btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Processing...';
+                    const canvas = document.getElementById('canvas');
+                    canvas.toBlob(blob => {
+                        const formData = new FormData();
+                        formData.append('action', 'punch_out');
+                        formData.append('latitude',  pos.coords.latitude);
+                        formData.append('longitude', pos.coords.longitude);
+                        formData.append('photo', blob, 'selfie.jpg');
+
+                        fetch('user_attendance.php', { method: 'POST', body: formData })
+                        .then(r => r.json())
+                        .then(data => {
+                            if (data.success) {
+                                addLog('✅ Punched Out Successfully!', true);
+                                document.getElementById('currentStatus').innerHTML = '🔴 Inactive (Punched Out)';
+                                setTimeout(() => location.reload(), 2000);
+                            } else {
+                                addLog('❌ ' + data.message);
+                                Swal.fire('Cannot Punch Out', data.message, 'warning');
+                                isPunching = false;
+                                btn.disabled = false;
+                                btn.innerHTML = '<i class="fas fa-sign-out-alt"></i> Punch Out';
+                            }
+                        })
+                        .catch(err => {
+                            addLog('Error: ' + err.message);
+                            isPunching = false;
+                            btn.disabled = false;
+                            btn.innerHTML = '<i class="fas fa-sign-out-alt"></i> Punch Out';
+                        });
+                    }, 'image/jpeg', 0.95);
+                },
+                err => {
+                    Swal.fire('Location Required', 'GPS access was denied. You must allow location to mark attendance.', 'error');
+                    isPunching = false;
+                    btn.disabled = false;
+                    btn.innerHTML = '<i class="fas fa-sign-out-alt"></i> Punch Out';
+                },
+                { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
+            );
         }
     </script>
 </body>

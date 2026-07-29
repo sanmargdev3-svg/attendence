@@ -68,6 +68,52 @@ function getLocationName($latitude, $longitude) {
     }
 }
 
+// --- Haversine distance (meters) ---
+function haversineDistance($lat1, $lon1, $lat2, $lon2) {
+    $R     = 6371000;
+    $phi1  = deg2rad((float)$lat1);
+    $phi2  = deg2rad((float)$lat2);
+    $dphi  = deg2rad((float)$lat2 - (float)$lat1);
+    $dlam  = deg2rad((float)$lon2 - (float)$lon1);
+    $a     = sin($dphi/2)**2 + cos($phi1)*cos($phi2)*sin($dlam/2)**2;
+    return $R * 2 * atan2(sqrt($a), sqrt(1-$a));
+}
+
+// --- Validate employee is within allowed radius of Head Office (if geo_restricted is ON) ---
+function checkLocationAllowed($conn, $user_id, $user_lat, $user_lng) {
+    $stmt = $conn->prepare("SELECT geo_restricted FROM users WHERE id = ? LIMIT 1");
+    $stmt->bind_param("i", $user_id);
+    $stmt->execute();
+    $user = $stmt->get_result()->fetch_assoc();
+    $stmt->close();
+
+    // No restriction → allow from anywhere
+    if (!$user || empty($user['geo_restricted'])) {
+        return ['allowed' => true, 'distance' => null];
+    }
+
+    // Restriction is ON — GPS is mandatory
+    if ($user_lat === null || $user_lng === null) {
+        return ['allowed' => false, 'message' => 'Location access is required to mark attendance. Please allow GPS in your browser and try again.'];
+    }
+
+    $res = $conn->query("SELECT latitude, longitude, radius_meters, office_name FROM office_settings ORDER BY id LIMIT 1");
+    if (!$res || $res->num_rows === 0 || !($office = $res->fetch_assoc()) || $office['latitude'] === null) {
+        return ['allowed' => true, 'distance' => null];
+    }
+
+    $radius   = max(50, (int)($office['radius_meters'] ?? 100));
+    $distance = haversineDistance($user_lat, $user_lng, $office['latitude'], $office['longitude']);
+
+    if ($distance > $radius) {
+        return [
+            'allowed' => false,
+            'message' => 'You are ' . round($distance) . ' m away from ' . ($office['office_name'] ?? 'the office') . '. Attendance is only allowed within ' . $radius . ' m.'
+        ];
+    }
+    return ['allowed' => true, 'distance' => round($distance)];
+}
+
 // Create uploads directory with date-based subfolder (YYYY/MM/DD)
 $upload_dir = '../uploads/selfies/' . date('Y/m/d');
 if (!is_dir($upload_dir)) {
@@ -99,9 +145,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $punch_out_lat = isset($_POST['punch_out_lat']) ? floatval($_POST['punch_out_lat']) : null;
     $punch_out_lng = isset($_POST['punch_out_lng']) ? floatval($_POST['punch_out_lng']) : null;
     $punch_out_accuracy = isset($_POST['punch_out_accuracy']) ? floatval($_POST['punch_out_accuracy']) : null;
-    
+
+    // Enforce GPS geofencing if this employee has restriction enabled
+    $locCheck = checkLocationAllowed($conn, $user_id, $punch_out_lat, $punch_out_lng);
+
+    if (!$locCheck['allowed']) {
+        $message = "✗ " . $locCheck['message'];
+        $message_type = "danger";
+    }
         // Check if selfie is provided (location is optional)
-        if (empty($_POST['selfie_image'])) {
+        else if (empty($_POST['selfie_image'])) {
             $message = "✗ Please capture a selfie before punching out";
             $message_type = "danger";
     } else {

@@ -28,6 +28,16 @@ $conn->query("CREATE TABLE IF NOT EXISTS locations (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 )");
 
+// Add GPS coordinate columns if missing (safe for all MySQL/MariaDB versions)
+$chk_lat = $conn->query("SHOW COLUMNS FROM locations LIKE 'latitude'");
+if ($chk_lat && $chk_lat->num_rows === 0) {
+    $conn->query("ALTER TABLE locations ADD COLUMN latitude DECIMAL(10,8) DEFAULT NULL");
+}
+$chk_lng = $conn->query("SHOW COLUMNS FROM locations LIKE 'longitude'");
+if ($chk_lng && $chk_lng->num_rows === 0) {
+    $conn->query("ALTER TABLE locations ADD COLUMN longitude DECIMAL(11,8) DEFAULT NULL");
+}
+
 // Handle Add Location
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_location'])) {
     $location_name = htmlspecialchars(trim($_POST['location_name']));
@@ -45,8 +55,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_location'])) {
             $message = "This location already exists";
             $message_type = "warning";
         } else {
-            $stmt_insert = $conn->prepare("INSERT INTO locations (name) VALUES (?)");
-            $stmt_insert->bind_param("s", $location_name);
+            $loc_lat = isset($_POST['latitude']) && $_POST['latitude'] !== '' ? (float)$_POST['latitude'] : null;
+            $loc_lng = isset($_POST['longitude']) && $_POST['longitude'] !== '' ? (float)$_POST['longitude'] : null;
+            $stmt_insert = $conn->prepare("INSERT INTO locations (name, latitude, longitude) VALUES (?, ?, ?)");
+            $stmt_insert->bind_param("sdd", $location_name, $loc_lat, $loc_lng);
             
             if ($stmt_insert->execute()) {
                 $message = "✓ Location added successfully!";
@@ -59,6 +71,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_location'])) {
         }
         $stmt_check->close();
     }
+}
+
+// Handle Update Coordinates
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_coords'])) {
+    $upd_id  = (int)$_POST['loc_id'];
+    $upd_lat = isset($_POST['upd_latitude'])  && $_POST['upd_latitude']  !== '' ? (float)$_POST['upd_latitude']  : null;
+    $upd_lng = isset($_POST['upd_longitude']) && $_POST['upd_longitude'] !== '' ? (float)$_POST['upd_longitude'] : null;
+    $stmt_upd = $conn->prepare("UPDATE locations SET latitude = ?, longitude = ? WHERE id = ?");
+    $stmt_upd->bind_param("ddi", $upd_lat, $upd_lng, $upd_id);
+    if ($stmt_upd->execute()) {
+        $message = "✓ Office GPS coordinates updated successfully!";
+        $message_type = "success";
+    } else {
+        $message = "Error: " . $stmt_upd->error;
+        $message_type = "danger";
+    }
+    $stmt_upd->close();
 }
 
 // Handle Delete Location
@@ -91,7 +120,7 @@ if (isset($_GET['delete_location'])) {
 }
 
 // Fetch all locations
-$stmt = $conn->prepare("SELECT id, name, created_at FROM locations ORDER BY name");
+$stmt = $conn->prepare("SELECT id, name, latitude, longitude, created_at FROM locations ORDER BY name");
 $stmt->execute();
 $result = $stmt->get_result();
 ?>
@@ -124,14 +153,28 @@ $result = $stmt->get_result();
             </div>
             <div class="card-body">
                 <form method="POST" class="row g-3">
-                    <div class="col-md-8">
+                    <div class="col-md-5">
                         <label class="form-label">Location Name</label>
                         <input type="text" name="location_name" class="form-control" placeholder="e.g., Head Office, Branch Office" required>
                     </div>
-                    <div class="col-md-4 d-flex align-items-end">
+                    <div class="col-md-2">
+                        <label class="form-label">Latitude <small class="text-muted">(optional)</small></label>
+                        <input type="number" step="any" name="latitude" id="add_lat" class="form-control" placeholder="e.g., 22.5726">
+                    </div>
+                    <div class="col-md-2">
+                        <label class="form-label">Longitude <small class="text-muted">(optional)</small></label>
+                        <input type="number" step="any" name="longitude" id="add_lng" class="form-control" placeholder="e.g., 88.3639">
+                    </div>
+                    <div class="col-md-1 d-flex align-items-end">
+                        <button type="button" class="btn btn-outline-secondary w-100" onclick="fillMyLocation('add_lat','add_lng')" title="Use my current GPS location">📍 GPS</button>
+                    </div>
+                    <div class="col-md-2 d-flex align-items-end">
                         <button type="submit" name="add_location" class="btn btn-success w-100">✓ Add Location</button>
                     </div>
                 </form>
+                <div class="mt-2 text-muted small">
+                    <i class="fas fa-info-circle"></i> Set GPS coordinates to enforce <strong>100-metre attendance radius</strong>. Leave blank to allow attendance from anywhere.
+                </div>
             </div>
         </div>
 
@@ -147,6 +190,8 @@ $result = $stmt->get_result();
                             <tr>
                                 <th>ID</th>
                                 <th>Location Name</th>
+                                <th>Office GPS Coordinates</th>
+                                <th>Radius</th>
                                 <th>Created At</th>
                                 <th>Actions</th>
                             </tr>
@@ -155,17 +200,26 @@ $result = $stmt->get_result();
                             <?php
                             if ($result->num_rows > 0) {
                                 while ($row = $result->fetch_assoc()) {
+                                    $hasCoords = ($row['latitude'] !== null && $row['longitude'] !== null);
                                     echo "<tr>";
                                     echo "<td>" . $row['id'] . "</td>";
                                     echo "<td><strong>" . htmlspecialchars($row['name']) . "</strong></td>";
+                                    if ($hasCoords) {
+                                        echo "<td><span class='badge bg-success'>✓ Set</span> <small class='text-muted'>" . $row['latitude'] . ", " . $row['longitude'] . "</small></td>";
+                                        echo "<td><span class='badge bg-primary'>100 m</span></td>";
+                                    } else {
+                                        echo "<td><span class='badge bg-warning text-dark'>⚠ Not Set</span> <small class='text-muted'>No restriction</small></td>";
+                                        echo "<td><span class='badge bg-secondary'>None</span></td>";
+                                    }
                                     echo "<td>" . date('d-m-Y H:i', strtotime($row['created_at'])) . "</td>";
                                     echo "<td>";
-                                    echo "<button type='button' onclick=\"confirmDeleteLocation(" . $row['id'] . ", '" . htmlspecialchars($row['name']) . "')\" class='btn btn-sm btn-danger'>Delete</button>";
+                                    echo "<button type='button' onclick=\"openSetCoords(" . $row['id'] . ", '" . htmlspecialchars($row['name'], ENT_QUOTES) . "', '" . $row['latitude'] . "', '" . $row['longitude'] . "')\" class='btn btn-sm btn-info me-1'>📍 Set GPS</button>";
+                                    echo "<button type='button' onclick=\"confirmDeleteLocation(" . $row['id'] . ", '" . htmlspecialchars($row['name'], ENT_QUOTES) . "')\" class='btn btn-sm btn-danger'>Delete</button>";
                                     echo "</td>";
                                     echo "</tr>";
                                 }
                             } else {
-                                echo "<tr><td colspan='4' class='text-center text-muted'>No locations found. Add one to get started!</td></tr>";
+                                echo "<tr><td colspan='6' class='text-center text-muted'>No locations found. Add one to get started!</td></tr>";
                             }
                             ?>
                         </tbody>
@@ -180,7 +234,74 @@ $result = $stmt->get_result();
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+
+    <!-- Set GPS Coordinates Modal -->
+    <div class="modal fade" id="setCoordsModal" tabindex="-1">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <form method="POST">
+                    <input type="hidden" name="loc_id" id="modal_loc_id">
+                    <div class="modal-header bg-info text-white">
+                        <h5 class="modal-title">📍 Set Office GPS Coordinates</h5>
+                        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+                    </div>
+                    <div class="modal-body">
+                        <p class="text-muted small">Setting coordinates enables the <strong>100-metre attendance restriction</strong>. Employees outside this radius cannot mark attendance.</p>
+                        <div class="mb-3">
+                            <label class="form-label fw-semibold">Location: <span id="modal_loc_name" class="text-primary"></span></label>
+                        </div>
+                        <div class="row g-2">
+                            <div class="col-6">
+                                <label class="form-label">Latitude</label>
+                                <input type="number" step="any" name="upd_latitude" id="modal_lat" class="form-control" placeholder="e.g., 22.5726" required>
+                            </div>
+                            <div class="col-6">
+                                <label class="form-label">Longitude</label>
+                                <input type="number" step="any" name="upd_longitude" id="modal_lng" class="form-control" placeholder="e.g., 88.3639" required>
+                            </div>
+                        </div>
+                        <div class="mt-2">
+                            <button type="button" class="btn btn-outline-secondary btn-sm" onclick="fillMyLocation('modal_lat','modal_lng')">
+                                📍 Use My Current GPS Location
+                            </button>
+                            <small class="text-muted ms-2">Your browser will ask for permission</small>
+                        </div>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                        <button type="submit" name="update_coords" class="btn btn-success">💾 Save Coordinates</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
     <script>
+        function openSetCoords(id, name, lat, lng) {
+            document.getElementById('modal_loc_id').value   = id;
+            document.getElementById('modal_loc_name').textContent = name;
+            document.getElementById('modal_lat').value      = (lat && lat !== 'null') ? lat : '';
+            document.getElementById('modal_lng').value      = (lng && lng !== 'null') ? lng : '';
+            new bootstrap.Modal(document.getElementById('setCoordsModal')).show();
+        }
+
+        function fillMyLocation(latFieldId, lngFieldId) {
+            if (!navigator.geolocation) {
+                alert('Geolocation is not supported by your browser.');
+                return;
+            }
+            navigator.geolocation.getCurrentPosition(
+                pos => {
+                    document.getElementById(latFieldId).value = pos.coords.latitude.toFixed(8);
+                    document.getElementById(lngFieldId).value = pos.coords.longitude.toFixed(8);
+                },
+                err => {
+                    alert('Could not get location: ' + err.message + '\nPlease enter coordinates manually.');
+                },
+                { enableHighAccuracy: true, timeout: 10000 }
+            );
+        }
+
         function confirmDeleteLocation(locationId, locationName) {
             Swal.fire({
                 title: 'Are you sure?',
